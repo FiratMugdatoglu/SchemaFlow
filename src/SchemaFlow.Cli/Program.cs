@@ -18,6 +18,16 @@ app.Configure(config =>
         .WithDescription("İki şemayı karşılaştırarak canlı sistemi bozabilecek (Breaking Changes) riskleri raporlar.")
         .WithExample(new[] { "diff", "--base", "./v1.sql", "--target", "./v2.sql" })
         .WithExample(new[] { "diff", "-b", "./v1.cs", "-t", "./v2.cs", "--fail-on-breaking" });
+
+    config.AddCommand<LintCommand>("lint")
+        .WithDescription("Şema dosyalarını eksik Primary Key, indekssiz Foreign Key ve rezerve SQL anahtar kelimelerine karşı denetler.")
+        .WithExample(new[] { "lint", "--input", "./schema.sql" })
+        .WithExample(new[] { "lint", "-i", "./schema.prisma", "--fail-on-warnings" });
+
+    config.AddCommand<SeedCommand>("seed")
+        .WithDescription("Şema ilişkilerini analiz ederek test ortamları için ilişkisel sahte (dummy) SQL verisi üretir.")
+        .WithExample(new[] { "seed", "--input", "./schema.sql", "--count", "25", "--output", "./seed.sql" })
+        .WithExample(new[] { "seed", "-i", "./schema.prisma", "-n", "50" });
 });
 
 return await app.RunAsync(args);
