@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SchemaFlow.Cli/SchemaFlow.Cli.csproj" />
+    <Project Path="src/SchemaFlow.Core/SchemaFlow.Core.csproj" />
+  </Folder>
+</Solution>

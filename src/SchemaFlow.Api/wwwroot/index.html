@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="tr" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SchemaFlow.ai - Canlı Şema Stüdyosu</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: { colors: { brand: { 500: '#06b6d4', 600: '#0891b2' } } } }
+    }
+  </script>
+  <style>
+    body { background-color: #0b0f17; color: #f1f5f9; font-family: ui-sans-serif, system-ui, sans-serif; }
+    #diagram-container svg { width: 100% !important; height: 100% !important; min-height: 500px; }
+    .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+  <!-- ÜST PANEL (NAVBAR) -->
+  <header class="h-14 border-b border-slate-800 bg-slate-900/90 backdrop-blur px-6 flex items-center justify-between shrink-0">
+    <div class="flex items-center space-x-3">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-white shadow-lg shadow-cyan-500/20">S</div>
+      <span class="font-bold text-lg tracking-tight text-white">SchemaFlow<span class="text-cyan-400">.ai</span></span>
+      <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800/50">Studio v1.0</span>
+    </div>
+
+    <div class="flex items-center space-x-3">
+      <button onclick="loadSample()" class="text-xs px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 transition">Örnek SQL Yükle</button>
+      <button onclick="renderSql()" class="text-xs px-4 py-1.5 rounded-md bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold shadow-md shadow-cyan-500/20 transition flex items-center space-x-1.5">
+        <span id="btn-text">⚡ Şemayı Görselleştir</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ANA ALAN: SOLDA SQL EDİTÖRÜ - SAĞDA DİYAGRAM TUVALİ -->
+  <div class="flex-1 flex overflow-hidden">
+
+    <!-- SOL EDİTÖR PANELİ -->
+    <div class="w-[420px] border-r border-slate-800 bg-slate-900/40 flex flex-col shrink-0">
+      <div class="p-3 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+        <span class="font-semibold text-slate-200">SQL DDL / Migration Girişi</span>
+        <select id="dialect" class="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-300 focus:outline-none">
+          <option value="postgres">PostgreSQL</option>
+          <option value="mysql">MySQL</option>
+        </select>
+      </div>
+
+      <div class="flex-1 p-3">
+        <textarea id="sql-input" spellcheck="false" class="w-full h-full bg-slate-950/80 border border-slate-800/80 rounded-lg p-3 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500 custom-scroll resize-none" placeholder="Buraya CREATE TABLE veya ALTER TABLE komutlarınızı yapıştırın..."></textarea>
+      </div>
+
+      <div class="p-3 border-t border-slate-800 text-[11px] text-slate-500 flex justify-between">
+        <span>Tasarım: %100 Yerel Ayrıştırma</span>
+        <span id="stat-time">0 ms</span>
+      </div>
+    </div>
+
+    <!-- SAĞ DİYAGRAM TUVALİ (CANVAS) -->
+    <div class="flex-1 relative bg-[#090d16] flex flex-col overflow-hidden">
+      
+      <!-- Tuval Üst Çubuğu (Toolbar) -->
+      <div class="h-10 border-b border-slate-800/60 px-4 flex items-center justify-between text-xs text-slate-400 bg-slate-950/30">
+        <div class="flex items-center space-x-2">
+          <span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+          <span>İnteraktif ER Tuvali</span>
+        </div>
+        <div class="flex items-center space-x-2">
+          <button onclick="resetZoom()" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 transition">Merkeze Al (Fit)</button>
+          <button onclick="copyCurrentMermaid()" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 transition">Mermaid Kopyala</button>
+        </div>
+      </div>
+
+      <!-- Çizim Alanı -->
+      <div id="canvas" class="flex-1 relative flex items-center justify-center p-4 overflow-hidden">
+        <div id="diagram-container" class="w-full h-full flex items-center justify-center">
+          <div class="text-center text-slate-600">
+            <div class="text-4xl mb-2">📊</div>
+            <p class="text-xs">Sol tarafa bir SQL yapıştırıp <b>'Şemayı Görselleştir'</b> butonuna basın.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    mermaid.initialize({ startOnLoad: false, theme: 'dark', er: { useMaxWidth: false } });
+    let panZoomInstance = null;
+    let currentMermaidCode = "";
+
+    const sampleSql = `-- E-Ticaret Örnek Veritabanı
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) NOT NULL UNIQUE,
+    full_name VARCHAR(150),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE categories (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL
+);
+
+CREATE TABLE products (
+    id SERIAL PRIMARY KEY,
+    category_id INT REFERENCES categories(id),
+    title VARCHAR(200) NOT NULL,
+    price NUMERIC(10, 2) NOT NULL
+);
+
+CREATE TABLE orders (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    total_amount NUMERIC(10, 2) NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending'
+);
+
+CREATE TABLE order_items (
+    id SERIAL PRIMARY KEY,
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    product_id INT NOT NULL REFERENCES products(id),
+    quantity INT DEFAULT 1
+);`;
+
+    function loadSample() {
+      document.getElementById('sql-input').value = sampleSql;
+      renderSql();
+    }
+
+    async function renderSql() {
+      const sql = document.getElementById('sql-input').value.trim();
+      if (!sql) {
+        alert("Lütfen önce bir SQL metni girin!");
+        return;
+      }
+
+      const btnText = document.getElementById('btn-text');
+      btnText.innerText = "⏳ Ayrıştırılıyor...";
+
+      try {
+        const response = await fetch('/api/v1/schema/render', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sql: sql,
+            format: 'mermaid',
+            dialect: document.getElementById('dialect').value
+          })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+          currentMermaidCode = data.content;
+          document.getElementById('stat-time').innerText = data.elapsedMilliseconds + " ms";
+
+          const container = document.getElementById('diagram-container');
+          const { svg } = await mermaid.render('interactive-erd', currentMermaidCode);
+          container.innerHTML = svg;
+
+          if (panZoomInstance) {
+            panZoomInstance.destroy();
+          }
+          panZoomInstance = svgPanZoom('#interactive-erd', {
+            zoomEnabled: true,
+            controlIconsEnabled: false,
+            fit: true,
+            center: true,
+            minZoom: 0.1,
+            maxZoom: 10
+          });
+        } else {
+          alert("Hata: " + (data.errorMessage || "Diyagram üretilemedi."));
+        }
+      } catch (err) {
+        alert("API bağlantı hatası: " + err.message);
+      } finally {
+        btnText.innerText = "⚡ Şemayı Görselleştir";
+      }
+    }
+
+    function resetZoom() {
+      if (panZoomInstance) {
+        panZoomInstance.reset();
+        panZoomInstance.fit();
+        panZoomInstance.center();
+      }
+    }
+
+    function copyCurrentMermaid() {
+      if (!currentMermaidCode) {
+        alert("Önce bir şema oluşturmalısınız!");
+        return;
+      }
+      navigator.clipboard.writeText(currentMermaidCode);
+      alert("Mermaid kodu panoya kopyalandı!");
+    }
+
+    // Başlangıçta örnek SQL'i yükle
+    window.onload = () => loadSample();
+  </script>
+</body>
+</html>

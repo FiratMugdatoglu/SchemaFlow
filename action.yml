@@ -1,0 +1,43 @@
+name: 'SchemaFlow.ai'
+description: 'PostgreSQL, MySQL ve MSSQL migration dosyalarından anında interaktif Mermaid ER diyagramı ve dokümantasyon üretir.'
+author: 'SchemaFlow.ai'
+
+branding:
+  icon: 'database'
+  color: 'blue'
+
+inputs:
+  input:
+    description: 'Ayrıştırılacak SQL dosyası veya migration klasörünün yolu (örn: ./migrations).'
+    required: true
+    default: './migrations'
+  
+  output:
+    description: 'Dokümantasyonun kaydedileceği dosya (örn: ./docs/database.md).'
+    required: false
+    default: './docs/database.md'
+
+  dialect:
+    description: 'Hedef veritabanı motoru: postgres, mysql, efcore, prisma, liquibase, django, rails.'
+    required: false
+    default: 'postgres'
+
+  format:
+    description: 'Çıktı biçimi: markdown (veri sözlüğü + diyagram) veya mermaid (sadece ER diyagramı).'
+    required: false
+    default: 'markdown'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  args:
+    - 'generate'
+    - '--input'
+    - ${{ inputs.input }}
+    - '--output'
+    - ${{ inputs.output }}
+    - '--dialect'
+    - ${{ inputs.dialect }}
+    - '--format'
+    - ${{ inputs.format }}
+    - ${{ inputs.inject == 'true' && '--inject' || '' }}

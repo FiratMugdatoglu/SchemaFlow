@@ -1,0 +1,33 @@
+# ==========================================
+# SchemaFlow.Api - Multi-Stage Production Dockerfile
+# ==========================================
+
+# 1. Aşama: Derleme & Paketleme (Build Stage)
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+
+# Bağımlılıkları önbelleklemek (cache) için proje dosyalarını kopyalayıp restore ediyoruz
+COPY SchemaFlow.sln ./
+COPY src/SchemaFlow.Core/SchemaFlow.Core.csproj src/SchemaFlow.Core/
+COPY src/SchemaFlow.Api/SchemaFlow.Api.csproj src/SchemaFlow.Api/
+
+RUN dotnet restore src/SchemaFlow.Api/SchemaFlow.Api.csproj
+
+# Tüm kaynak kodları kopyala ve optimize edilmiş Release sürümünü yayınla
+COPY src/ src/
+RUN dotnet publish src/SchemaFlow.Api/SchemaFlow.Api.csproj -c Release -o /app/publish --no-restore
+
+# ==========================================
+# 2. Aşama: ASP.NET Core Çalışma Zamanı (Runtime Stage - Hafif & Hızlı)
+# ==========================================
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
+WORKDIR /app
+
+# Derlenmiş dosyaları ve statik web stüdyosunu (wwwroot) al
+COPY --from=build /app/publish .
+
+# Standart bulut konteyner portu (Fly.io, Render, Railway vb.)
+ENV ASPNETCORE_HTTP_PORTS=8080
+EXPOSE 8080
+
+ENTRYPOINT ["dotnet", "SchemaFlow.Api.dll"]

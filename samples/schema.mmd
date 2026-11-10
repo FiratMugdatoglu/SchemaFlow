@@ -1,0 +1,33 @@
+erDiagram
+    users ||--o{ orders : "fk_orders_user"
+    orders ||--o{ order_items : "fk_items_order"
+    products ||--o{ order_items : "fk_items_product"
+
+    users {
+        UUID id PK
+        VARCHAR(50) username
+        VARCHAR(255) email "Giriş için kullanılan tekil e-posta"
+        TIMESTAMPTZ created_at
+    }
+
+    products {
+        SERIAL id PK
+        VARCHAR(150) name
+        NUMERIC(10_2) price
+        INT stock_count
+    }
+
+    orders {
+        UUID id PK
+        UUID user_id FK
+        NUMERIC(10_2) total_amount
+        VARCHAR(30) status
+        TIMESTAMPTZ created_at
+    }
+
+    order_items {
+        SERIAL id PK
+        UUID order_id FK
+        INT product_id FK
+        INT quantity
+    }

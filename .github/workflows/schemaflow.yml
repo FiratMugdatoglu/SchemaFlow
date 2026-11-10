@@ -1,0 +1,84 @@
+name: 'SchemaFlow.ai Otomasyonu'
+
+# Sadece veritabanı veya migration dosyaları değiştiğinde tetiklenir
+on:
+  pull_request:
+    paths:
+      - '**/migrations/**'
+      - '**/*.sql'
+      - 'schema.sql'
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '**/migrations/**'
+      - '**/*.sql'
+      - 'schema.sql'
+
+permissions:
+  contents: write       # README.md dosyasını otomatik commit edebilmek için
+  pull-requests: write  # PR altına otomatik şema yorumu atabilmek için
+
+jobs:
+  schemaflow:
+    name: 'Veritabanı Şeması & Dokümantasyon Üretici'
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Depoyu indir
+      - name: 'Kodu Klonla'
+        uses: actions/checkout@v4
+
+      # 2. SchemaFlow Docker Action'ını Çalıştır
+      - name: 'SchemaFlow ile Şemayı Güncelle'
+        uses: ./ # Kendi depomuzdaki action.yml dosyasını çalıştırır
+        with:
+          input: './migrations'
+          output: './docs/database.md'
+          dialect: 'postgres'
+
+      # 3. Eğer Pull Request ise: PR'ın Altına Otomatik Şema Yorumu At
+      - name: 'PR Altına Şema Yorumu Bırak'
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = './README.md';
+
+            let commentBody = '### 🤖 SchemaFlow.ai - Veritabanı Değişiklik Raporu\n\nBu PR veritabanı migration dosyalarını değiştirdi! İşte güncel şemanız:\n\n';
+
+            if (fs.existsSync(path)) {
+              const content = fs.readFileSync(path, 'utf8');
+              const beginMarker = '<!-- BEGIN_SCHEMAFLOW -->';
+              const endMarker = '<!-- END_SCHEMAFLOW -->';
+              
+              const start = content.indexOf(beginMarker);
+              const end = content.indexOf(endMarker);
+              
+              if (start !== -1 && end !== -1) {
+                const schemaSection = content.substring(start + beginMarker.length, end).trim();
+                commentBody += schemaSection;
+              } else {
+                commentBody += content;
+              }
+            } else {
+              commentBody += '*(Dokümantasyon dosyası bulunamadı)*';
+            }
+
+            // PR'a yorum at
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+      # 4. Eğer doğrudan 'main' dalına push yapıldıysa: Güncel README.md'yi otomatik commit et
+      - name: 'Güncellenen README.md Dosyasını Commit Et'
+        if: github.event_name == 'push'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'docs(schema): veritabanı ER şeması otomatik güncellendi [skip ci]'
+          file_pattern: 'README.md docs/'
