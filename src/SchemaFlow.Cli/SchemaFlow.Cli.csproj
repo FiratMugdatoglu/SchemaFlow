@@ -14,6 +14,21 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- Global .NET Tool Ayarları -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>schemaflow</ToolCommandName>
+    <PackageId>SchemaFlow</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>SchemaFlow Team</Authors>
+    <Description>Developer-First Universal Database Schema Documentation, Mermaid ER Diagramming, Linter and Breaking Change Diff Engine.</Description>
+    <PackageTags>database;schema;mermaid;diff;migrations;documentation;linter;prisma;efcore;django;rails;sql</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>
