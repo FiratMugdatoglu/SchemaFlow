@@ -10,7 +10,7 @@
 **No database credentials required. Zero risk of live connection breaches. 100% offline.**  
 Transform your SQL and ORM migration files in milliseconds into rich Markdown data dictionaries, interactive Mermaid.js ER diagrams, schema health audits, and smart seed test data.
 
-[Features](#-features) • [Installation](#-installation) • [CLI Usage](#-cli-usage) • [GitHub Action](#-github-action-ci-cd) • [Web Studio](#-interactive-web-studio) • [Pricing](#-pricing)
+[Features](#-features) • [Installation](#-installation) • [CLI Usage](#-cli-usage) • [GitHub Action](#-github-action-ci-cd) • [Web Studio](#-interactive-web-studio)
 
 ---
 
@@ -171,24 +171,5 @@ Open `http://localhost:5285/` in your browser to paste your SQL and explore your
 
 ---
 
-## 💎 Pricing
-
-SchemaFlow follows the **Open-Core** philosophy. Local CLI usage is 100% free; automated team and cloud collaboration features are available via subscription.
-
-| Feature | Free (Developer) | Pro (Solo Builder) | Team (Agencies & Teams) |
-| :--- | :---: | :---: | :---: |
-| **Monthly Price** | **$0** | **$9 / month** | **$29 / month** |
-| **Local CLI Engine** | Unlimited & Offline | Unlimited | Unlimited |
-| **Mermaid ER & Markdown** | Included | Included | Included |
-| **Schema Linter & Diff** | Included | Included | Included |
-| **Smart Seed Generator** | Included | Included | Included |
-| **GitHub Action PR Bot** | Up to 10 PRs / mo | **Unlimited PRs** | **Unlimited PRs** |
-| **Breaking Change Alerts** | — | **Included** | **Included** |
-| **Shareable Cloud Studio** | — | **Included** | **Included** |
-| **Export Formats** | Markdown | PDF, SVG, Hi-Res PNG | PDF, SVG, PNG |
-| **Seats** | 1 Developer | 1 Developer | **5 Seats** |
-
----
-
 ## 📄 License
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](LICENSE) - free for personal and commercial use.
