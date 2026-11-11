@@ -10,7 +10,7 @@
 **No database credentials required. Zero risk of live connection breaches. 100% offline.**  
 Transform your SQL and ORM migration files in milliseconds into rich Markdown data dictionaries, interactive Mermaid.js ER diagrams, schema health audits, and smart seed test data.
 
-[Features](#-features) • [Installation](#-installation) • [CLI Usage](#-cli-usage) • [GitHub Action](#-github-action-ci-cd) • [Web Studio](#-interactive-web-studio)
+[Why SchemaFlow?](#-why-schemaflow) • [Installation](#-installation) • [CLI Usage](#-cli-usage) • [GitHub Action](#-github-action-ci--cd) • [Web Studio](#-interactive-web-studio)
 
 ---
 
