@@ -1,168 +1,194 @@
 <div align="center">
 
 # 🌊 SchemaFlow.ai
-### Developer-First Database Schema Documentation & Interactive ER Diagrams
+### Developer-First Universal Database Schema Documentation, Diagramming, Linter & Diff Engine
 
 [![.NET 9](https://img.shields.io/badge/.NET-9.0-purple.svg?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?style=flat-square&logo=docker)](https://www.docker.com/)
-[![GitHub Action](https://img.shields.io/badge/GitHub%20Action-v1-black.svg?style=flat-square&logo=githubactions)](https://github.com/marketplace)
+[![NuGet](https://img.shields.io/nuget/v/SchemaFlow.svg?style=flat-square&logo=nuget)](https://www.nuget.org/packages/SchemaFlow)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 
-**Veritabanı şifresi yok. Canlı bağlantı riski yok. Sıfır konfigürasyon.**  
-SQL ve migration dosyalarınızı saniyeler içinde zengin Markdown veri sözlüklerine ve interaktif Mermaid.js ER diyagramlarına dönüştürün.
+**No database credentials required. Zero risk of live connection breaches. 100% offline.**  
+Transform your SQL and ORM migration files in milliseconds into rich Markdown data dictionaries, interactive Mermaid.js ER diagrams, schema health audits, and smart seed test data.
 
-[Özellikler](#-özellikler) • [Hızlı Başlangıç (CLI)](#-hızlı-başlangıç-cli) • [GitHub Action](#-github-action-entegrasyonu) • [Web Stüdyosu](#-interaktif-web-stüdyosu) • [Fiyatlandırma](#-fiyatlandırma)
+[Features](#-features) • [Installation](#-installation) • [CLI Usage](#-cli-usage) • [GitHub Action](#-github-action-ci-cd) • [Web Studio](#-interactive-web-studio) • [Pricing](#-pricing)
 
 ---
 
 </div>
 
-## 💡 Neden SchemaFlow?
+## 💡 Why SchemaFlow?
 
-Geleneksel veritabanı dokümantasyon araçları veritabanınızın canlı IP'sini ve şifresini talep eder ya da her değişiklikte elle şema çizmenizi bekler. **SchemaFlow bu paradigmayı değiştirir:**
+Traditional database documentation and auditing tools require live database connection strings, opening ports, and granting read permissions to your production databases. **SchemaFlow completely redefines this workflow:**
 
-* 🔒 **Sıfır Bilgi Güvenliği (Zero-Knowledge Security):** Veritabanı kimlik bilgisi gerektirmez. Migration DDL dosyalarınızı yerel makinenizde veya CI/CD içinde çevrimdışı (offline) parse eder.
-* 🌐 **Evrensel Ekosistem Desteği:**
+* 🔒 **Zero-Knowledge Security:** No database host, username, or password required. Parse migration DDLs completely offline inside your local environment or CI/CD pipelines.
+* 🌐 **Universal Multi-Ecosystem Support:**
   * 🐘 **PostgreSQL & Supabase (`.sql`)**
   * 🐬 **MySQL & MariaDB (`.sql`)**
-  * 🟣 **.NET / C# Entity Framework Core (`.cs`)** — Dünyada ilk kez doğrudan C# migration okuma!
-  * ▲ **TypeScript / Node.js Prisma (`.prisma`)** — Next.js & NestJS projeleri için yerel destek.
-  * ☕ **Java & Spring Boot Liquibase (`.xml`) & Flyway (`.sql`)** — Kurumsal enterprise projeler.
-  * 🐍 **Python Django & Wagtail (`.py`)** — Django migration dosyalarından doğrudan şema çıkarma.
-  * 💎 **Ruby on Rails (`.rb`)** — Rails `schema.rb` dosyalarını anında görselleştirme.
-  * 🐹 **Go / Golang Migrations (`.sql`)** — Goose, Golang-Migrate, SQLC desteği.
-* 🤖 **GitHub PR Botu & CI/CD Native:** Pull Request açıldığında değişen tabloları otomatik analiz eder ve PR altına görsel ER diyagramı farkını yorum olarak ekler.
-* 📁 **Temiz & Müstakil Dokümantasyon:** `README.md` dosyanızı yüzlerce satırlık tabloyla kirletmez; doğrudan `docs/database.md` altında tertemiz bir mimari harita oluşturur.
-* ⚡ **Ultra Hafif & Hızlı:** .NET 9 Native gücüyle yüzlerce tabloluk kurumsal şemaları milisaniyeler içinde işler.
+  * 🟣 **.NET / C# Entity Framework Core (`.cs`)** — World's first tool parsing C# migration files directly!
+  * ▲ **TypeScript / Node.js Prisma (`schema.prisma`)** — Native schema support for Next.js & NestJS.
+  * ☕ **Java & Spring Boot Liquibase (`changelog.xml`) & Flyway (`.sql`)**
+  * 🐍 **Python Django & Wagtail (`.py`)** — Automatic parsing of Django migrations.
+  * 💎 **Ruby on Rails (`schema.rb`)** — Instant visual schemas from Rails schema dumps.
+  * 🐹 **Go Migrations (`.sql`)** — Goose, Golang-Migrate, SQLC compatible.
+* 🛡️ **Breaking Change Prevention:** Detect dangerous schema drift (dropped columns, narrowing types, non-null additions without defaults) before merging Pull Requests.
+* 🔍 **Database Health & Anti-Pattern Linter:** Catch missing Primary Keys, unindexed Foreign Keys, and reserved SQL keyword collisions in under 50ms.
+* 🌱 **Smart Relational Mock Data Generator:** Topological graph ordering generates valid relational fake test seed SQL without foreign key constraint violations.
+* 📁 **Clean & Modular Documentation:** Generates standalone `docs/database.md` with responsive Mermaid ER diagrams.
 
 ---
 
-## 🚀 Hızlı Başlangıç (CLI)
+## 📦 Installation
 
-### 1. Şema Dokümantasyonu & ER Diyagramı Üretme (`generate`)
-SQL, C#, Prisma, Java XML, Python veya Ruby dosyanızı hedef göstererek dokümanınızı oluşturun:
+Install SchemaFlow globally on your machine with one command:
 
 ```bash
-# 1. PostgreSQL / MySQL / Java Flyway / Go (.sql)
-schemaflow generate -i ./database/migrations -o ./docs/database.md
+dotnet tool install -g SchemaFlow
+```
 
-# 2. .NET / C# Entity Framework Core (.cs otomatik algılanır!)
+*Prerequisite: [.NET 9 SDK or Runtime](https://dotnet.microsoft.com/download) installed on your system.*
+
+---
+
+## 🚀 CLI Usage
+
+### 1. Generate Schema Docs & Mermaid ER Diagram (`generate`)
+Point to any migration directory or schema file:
+
+```bash
+# PostgreSQL / MySQL / Flyway / Go (.sql)
+schemaflow generate -i ./database/schema.sql -o ./docs/database.md
+
+# .NET Entity Framework Core (.cs is auto-detected!)
 schemaflow generate -i ./Migrations/InitialCreate.cs -o ./docs/database.md
 
-# 3. TypeScript / Node.js Prisma (.prisma otomatik algılanır!)
+# TypeScript Prisma (.prisma is auto-detected!)
 schemaflow generate -i ./prisma/schema.prisma -o ./docs/database.md
 
-# 4. Java Liquibase XML (.xml otomatik algılanır!)
-schemaflow generate -i ./src/main/resources/changelog.xml -o ./docs/database.md
-
-# 5. Python Django (.py otomatik algılanır!)
+# Python Django (.py is auto-detected!)
 schemaflow generate -i ./core/migrations/0001_initial.py -o ./docs/database.md
 
-# 6. Ruby on Rails (.rb otomatik algılanır!)
+# Java Liquibase (.xml is auto-detected!)
+schemaflow generate -i ./src/main/resources/changelog.xml -o ./docs/database.md
+
+# Ruby on Rails (.rb is auto-detected!)
 schemaflow generate -i ./db/schema.rb -o ./docs/database.md
 ```
 
-### 2. Akıllı Şema Karşılaştırma & Breaking Change Dedektörü (`diff`)
-İki migration dosyasını veya iki sürümü karşılaştırarak canlı sistemi çökertebilecek tehlikeli değişiklikleri anında yakalayın:
+---
+
+### 2. Smart Schema Diff & Breaking Change Detection (`diff`)
+Compare two schema versions and catch breaking changes before deploying to production:
 
 ```bash
-# İki şemayı karşılaştır ve terminalde renkli rapor al
-schemaflow diff -b ./migrations/v1_old.sql -t ./migrations/v2_new.sql
+# Compare two versions with color-coded CLI report
+schemaflow diff -b ./migrations/v1.sql -t ./migrations/v2.sql
 
-# CI/CD içinde tehlikeli bir değişiklik varsa işlemi durdur (exit code 1)
+# Fail CI/CD pipeline if destructive breaking changes are found (exit code 1)
 schemaflow diff -b ./v1.sql -t ./v2.sql --fail-on-breaking
 
-# Raporu Markdown olarak kaydet (PR yorumu için)
+# Export markdown report for GitHub PR comments
 schemaflow diff -b ./old_schema.prisma -t ./new_schema.prisma -o ./diff_report.md
 ```
 
-### 3. Komut Seçenekleri
-| Komut | Parametre | Açıklama |
-| :--- | :--- | :--- |
-| `generate` | `-i, --input` | Ayrıştırılacak migration dosyası/klasörü (Zorunlu) |
-| `generate` | `-o, --output` | Çıktının kaydedileceği hedef dosya (Varsayılan: `./docs/database.md`) |
-| `generate` | `-f, --format` | Çıktı formatı: `markdown` veya `mermaid` |
-| `diff` | `-b, --base` | Karşılaştırılacak temel (eski) şema dosyası |
-| `diff` | `-t, --target` | Karşılaştırılacak hedef (yeni) şema dosyası |
-| `diff` | `--fail-on-breaking` | Kritik Breaking Change varsa exit code 1 döner (CI/CD koruması) |
+---
+
+### 3. Database Health & Anti-Pattern Linter (`lint`)
+Audit your schemas against critical architectural rules and performance bottlenecks:
+
+```bash
+schemaflow lint -i ./schema.sql
+
+# Fail CI/CD if warnings or errors are present
+schemaflow lint -i ./schema.prisma --fail-on-warnings
+```
+
+**Built-in Rules:**
+* 🔴 **SF001:** Missing Primary Key detection.
+* 🟡 **SF002:** Unindexed Foreign Key detection (prevents table lockouts during JOINs and CASCADE operations).
+* 🟡 **SF003:** Reserved SQL keyword collision detection (`user`, `order`, `group`, etc.).
+* 🔴 **SF004:** Nullable Primary Key column warning.
+* 🔵 **SF005:** Unbounded text types indexed warning (`TEXT`, `VARCHAR(MAX)`).
 
 ---
 
-## 🤖 GitHub Action Entegrasyonu
+### 4. Smart Relational Mock Seed Generator (`seed`)
+Generate foreign-key aligned mock data for test environments:
 
-Takım arkadaşlarınız yeni bir migration eklediğinde dokümantasyonun kendiliğinden güncellenmesi için projenize `.github/workflows/schemaflow.yml` ekleyin:
+```bash
+schemaflow seed -i ./schema.prisma --count 25 --output seed.sql
+```
+
+SchemaFlow resolves the topological dependency tree (parent tables first, child tables second) and automatically populates realistic mock values (emails, names, dates, amounts, status flags).
+
+---
+
+## 🤖 GitHub Action (CI / CD)
+
+Add SchemaFlow to your GitHub Actions workflow (`.github/workflows/schemaflow.yml`):
 
 ```yaml
-name: "SchemaFlow Database Docs"
+name: "SchemaFlow Database CI"
 
 on:
-  push:
-    branches: [ main ]
+  pull_request:
     paths:
-      - 'migrations/**'
-      - 'database/**'
+      - '**/*.sql'
+      - '**/*.prisma'
+      - '**/Migrations/**'
 
 jobs:
-  document-schema:
+  schema-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate Database Documentation
-        uses: schemaflow/schemaflow-action@v1
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
-          input: './migrations'
-          output: './README.md'
-          inject: 'true'
+          dotnet-version: '9.0.x'
 
-      - name: Commit Updated Docs
-        run: |
-          git config --global user.name "SchemaFlow Bot"
-          git config --global user.email "bot@schemaflow.ai"
-          git commit -am "docs(db): otomatik şema dokümantasyonu güncellendi" || echo "Değişiklik yok"
-          git push
+      - name: Install SchemaFlow
+        run: dotnet tool install -g SchemaFlow
+
+      - name: Audit Schema
+        run: schemaflow lint -i ./database/schema.sql --fail-on-errors
+
+      - name: Update Documentation
+        run: schemaflow generate -i ./database/schema.sql -o ./docs/database.md
 ```
 
 ---
 
-## 🎨 İnteraktif Web Stüdyosu
+## 🎨 Interactive Web Studio
 
-Tarayıcı üzerinden görsel pan & zoom özellikli ER diyagramı deneyimi yaşamak için Web API'yi başlatın:
+Launch the local interactive Web Studio with responsive canvas, pan & zoom:
 
 ```bash
 cd src/SchemaFlow.Api
 dotnet run
 ```
-Tarayıcınızda `http://localhost:5285/` adresini açarak SQL'inizi yapıştırın ve şemanızı anında interaktif bir stüdyo tuvalinde inceleyin!
+Open `http://localhost:5285/` in your browser to paste your SQL and explore your database schema visually.
 
 ---
 
-## 💎 Fiyatlandırma (Pricing)
+## 💎 Pricing
 
-SchemaFlow **Open-Core** modelini benimser. Yerel geliştirme her zaman ücretsizdir; otomasyon ve bulut özellikleri abonelikle sunulur.
+SchemaFlow follows the **Open-Core** philosophy. Local CLI usage is 100% free; automated team and cloud collaboration features are available via subscription.
 
-| Özellik | Free (Developer) | Pro (Solo Builder) | Team (Ajans & Ekipler) |
+| Feature | Free (Developer) | Pro (Solo Builder) | Team (Agencies & Teams) |
 | :--- | :---: | :---: | :---: |
-| **Aylık Fiyat** | **$0** | **$9 / ay** *(veya $79/yıl)* | **$29 / ay** *(veya $249/yıl)* |
-| **Yerel CLI Kullanımı** | Sınırsız & Çevrimdışı | Sınırsız | Sınırsız |
-| **Mermaid ER & Markdown** | Dahil | Dahil | Dahil |
-| **Web Stüdyosu İnceleme** | Dahil | Dahil | Dahil |
-| **GitHub Action PR Botu** | Ayda 10 PR | **Sınırsız PR** | **Sınırsız PR** |
-| **Breaking Change Tespiti** | — | **Dahil** (Kolon silinme alarmı) | **Dahil** |
-| **Paylaşılabilir Canlı Link** | — | **Dahil** (Müşteri sunum linki) | **Dahil** |
-| **Dışa Aktarma (Export)** | Markdown | PDF, SVG, Yüksek Kalite PNG | PDF, SVG, PNG |
-| **White-Label (Kendi Logosu)** | — | — | **Dahil** (Markasız) |
-| **Kullanıcı Sayısı** | 1 Kişi | 1 Kişi | **5 Lisans** |
+| **Monthly Price** | **$0** | **$9 / month** | **$29 / month** |
+| **Local CLI Engine** | Unlimited & Offline | Unlimited | Unlimited |
+| **Mermaid ER & Markdown** | Included | Included | Included |
+| **Schema Linter & Diff** | Included | Included | Included |
+| **Smart Seed Generator** | Included | Included | Included |
+| **GitHub Action PR Bot** | Up to 10 PRs / mo | **Unlimited PRs** | **Unlimited PRs** |
+| **Breaking Change Alerts** | — | **Included** | **Included** |
+| **Shareable Cloud Studio** | — | **Included** | **Included** |
+| **Export Formats** | Markdown | PDF, SVG, Hi-Res PNG | PDF, SVG, PNG |
+| **Seats** | 1 Developer | 1 Developer | **5 Seats** |
 
 ---
 
-## 🛠️ Canlıya Alma ve Deployment
-
-Projenizi kendi bulut sunucunuza (Fly.io, Render, Railway, Supabase ve Lemon Squeezy) deploy etmek için adım adım hazırladığımız kılavuzu inceleyin:
-
-👉 [**Deployment Guide (DEPLOYMENT.md)**](DEPLOYMENT.md)
-
----
-
-## 📄 Lisans
-Bu proje [MIT Lisansı](LICENSE) kapsamında açık kaynak olarak geliştirilmiştir.
+## 📄 License
+This project is licensed under the [MIT License](LICENSE).
