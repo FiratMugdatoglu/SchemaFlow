@@ -92,8 +92,12 @@ public class EfCoreParser : BaseDatabaseParser
             var nullableMatch = Regex.Match(props, @"nullable:\s*(?<nullable>true|false)", RegexOptions.IgnoreCase);
             var isNullable = nullableMatch.Success && bool.Parse(nullableMatch.Groups["nullable"].Value);
 
-            // DefaultValue çek: defaultValue: ...
-            var defaultMatch = Regex.Match(props, @"defaultValue(?:Sql)?:\s*(?<def>[^,\)]+)", RegexOptions.IgnoreCase);
+            // DefaultValue çek: defaultValueSql: "GETUTCDATE()" veya defaultValue: 0
+            var defaultMatch = Regex.Match(props, @"defaultValue(?:Sql)?:\s*""(?<def>[^""]+)""", RegexOptions.IgnoreCase);
+            if (!defaultMatch.Success)
+            {
+                defaultMatch = Regex.Match(props, @"defaultValue:\s*(?<def>[^,\)]+)", RegexOptions.IgnoreCase);
+            }
             var defaultValue = defaultMatch.Success ? defaultMatch.Groups["def"].Value.Trim() : null;
 
             var column = new Column
