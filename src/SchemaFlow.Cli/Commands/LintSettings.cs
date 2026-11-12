@@ -26,6 +26,10 @@ public class LintSettings : CommandSettings
     [CommandOption("-o|--output <PATH>")]
     public string? OutputPath { get; set; }
 
+    [Description("Denetim raporunu ve şema görselini otomatik olarak tarayıcıda açar.")]
+    [CommandOption("--open")]
+    public bool OpenInBrowser { get; set; }
+
     public override ValidationResult Validate()
     {
         if (string.IsNullOrWhiteSpace(InputPath))
