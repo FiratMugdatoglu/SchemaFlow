@@ -25,6 +25,10 @@ public class DiffSettings : CommandSettings
     [CommandOption("-o|--output <PATH>")]
     public string? OutputPath { get; set; }
 
+    [Description("Karşılaştırma raporunu ve görsel Öncesi/Sonrası şemalarını varsayılan tarayıcıda otomatik olarak açar.")]
+    [CommandOption("--open")]
+    public bool OpenInBrowser { get; set; }
+
     public override ValidationResult Validate()
     {
         if (string.IsNullOrWhiteSpace(BasePath))

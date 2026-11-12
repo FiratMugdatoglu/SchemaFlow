@@ -104,12 +104,39 @@ public class DiffCommand : AsyncCommand<DiffSettings>
                 .Border(BoxBorder.Rounded)
                 .BorderColor(panelColor));
 
-        // 6. Opsiyonel Markdown Çıktısı
-        if (!string.IsNullOrEmpty(settings.OutputPath))
+        // 6. Opsiyonel Markdown Çıktısı veya Tarayıcıda Açma
+        if (!string.IsNullOrEmpty(settings.OutputPath) || settings.OpenInBrowser)
         {
-            var md = GenerateMarkdownDiffReport(diffResult, settings.BasePath, settings.TargetPath);
-            await File.WriteAllTextAsync(settings.OutputPath, md, cancellationToken);
-            AnsiConsole.MarkupLine($"\n[grey]Markdown Diff Raporu Kaydedildi:[/] [green]{settings.OutputPath}[/]");
+            var mdPath = settings.OutputPath ?? "diff_report.md";
+            var md = GenerateMarkdownDiffReport(diffResult, baseSchema, targetSchema, settings.BasePath, settings.TargetPath);
+            await File.WriteAllTextAsync(mdPath, md, cancellationToken);
+            AnsiConsole.MarkupLine($"\n[grey]Markdown Görsel Diff Raporu Kaydedildi:[/] [green]{mdPath}[/]");
+
+            if (settings.OpenInBrowser)
+            {
+                try
+                {
+                    var htmlPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(mdPath)) ?? Directory.GetCurrentDirectory(), "diff_preview.html");
+                    var htmlContent = GenerateHtmlDiffReport(diffResult, baseSchema, targetSchema, settings.BasePath, settings.TargetPath);
+                    await File.WriteAllTextAsync(htmlPath, htmlContent, cancellationToken);
+
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = htmlPath,
+                        UseShellExecute = true
+                    });
+
+                    AnsiConsole.MarkupLine($"[bold cyan]🚀 Görsel Öncesi/Sonrası karşılaştırması tarayıcıda açıldı:[/] [underline]{htmlPath}[/]\n");
+                }
+                catch (Exception ex)
+                {
+                    AnsiConsole.MarkupLine($"[yellow]Uyarı: Tarayıcı otomatik açılamadı ({ex.Message}).[/]");
+                }
+            }
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[grey]💡 İpucu: Bu farkı görsel olarak tarayıcıda incelemek için:[/] [cyan]--open[/] [grey]parametresini ekleyebilirsiniz.[/]");
         }
 
         // 7. CI/CD Kontrolü: Eğer --fail-on-breaking aktifse ve breaking change varsa 1 dön
@@ -136,21 +163,25 @@ public class DiffCommand : AsyncCommand<DiffSettings>
         };
     }
 
-    private static string GenerateMarkdownDiffReport(SchemaDiffResult result, string basePath, string targetPath)
+    private static string GenerateMarkdownDiffReport(SchemaDiffResult result, DatabaseSchema baseSchema, DatabaseSchema targetSchema, string basePath, string targetPath)
     {
+        var mermaidRenderer = new MermaidRenderer();
+        var baseMermaid = mermaidRenderer.Render(baseSchema);
+        var targetMermaid = mermaidRenderer.Render(targetSchema);
+
         var sb = new StringBuilder();
-        sb.AppendLine("# 🔍 SchemaFlow Şema Değişiklik & Breaking Change Raporu");
+        sb.AppendLine("# 🔍 SchemaFlow Görsel Şema Değişiklik & Breaking Change Raporu");
         sb.AppendLine();
-        sb.AppendLine($"> **Temel Dosya:** `{Path.GetFileName(basePath)}`  ");
-        sb.AppendLine($"> **Hedef Dosya:** `{Path.GetFileName(targetPath)}`  ");
+        sb.AppendLine($"> **Temel Şema (Eski):** `{Path.GetFileName(basePath)}` ({baseSchema.Tables.Count} Tablo)  ");
+        sb.AppendLine($"> **Hedef Şema (Yeni):** `{Path.GetFileName(targetPath)}` ({targetSchema.Tables.Count} Tablo)  ");
         sb.AppendLine($"> **Tarih:** `{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC`  ");
         sb.AppendLine();
 
         if (result.HasBreakingChanges)
         {
-            sb.AppendLine("## ⚠️ DİKKAT: Canlı Sistemi Bozabilecek Değişiklikler Bulundu!");
-            sb.AppendLine($"- 🔴 **Kritik Değişiklik Sayısı:** `{result.BreakingCount}`");
-            sb.AppendLine($"- 🟢 **Güvenli Değişiklik Sayısı:** `{result.SafeCount}`");
+            sb.AppendLine("## ⚠️ DİKKAT: Canlı Sistemi Bozabilecek (Breaking) Değişiklikler!");
+            sb.AppendLine($"- 🔴 **Kritik Değişiklik:** `{result.BreakingCount}` adet (Canlıyı patlatabilir)");
+            sb.AppendLine($"- 🟢 **Güvenli Değişiklik:** `{result.SafeCount}` adet");
         }
         else
         {
@@ -159,19 +190,102 @@ public class DiffCommand : AsyncCommand<DiffSettings>
         }
 
         sb.AppendLine();
-        sb.AppendLine("### 📋 Değişiklik Listesi");
-        sb.AppendLine("| Durum | Tür | Tablo | Açıklama |");
+        sb.AppendLine("### 📋 Değişiklik Listesi (Öncesi ➡️ Sonrası)");
+        sb.AppendLine("| Durum | Değişiklik Türü | Tablo | Açıklama & Etki |");
         sb.AppendLine("| :---: | :--- | :--- | :--- |");
 
         foreach (var change in result.Changes)
         {
-            var badge = change.IsBreaking ? "🔴 BREAKING" : "🟢 SAFE";
-            sb.AppendLine($"| **{badge}** | `{change.Type}` | `{change.TableName}` | {change.Description} |");
+            var badge = change.IsBreaking ? "🔴 **BREAKING**" : "🟢 **SAFE**";
+            sb.AppendLine($"| {badge} | `{change.Type}` | `{change.TableName}` | {change.Description} |");
         }
 
         sb.AppendLine();
         sb.AppendLine("---");
-        sb.AppendLine("*Bu rapor [SchemaFlow.ai](https://github.com) tarafından otomatik oluşturulmuştur.*");
+        sb.AppendLine("## 📊 Görsel Mimari Karşılaştırması (Before vs After)");
+        sb.AppendLine();
+        sb.AppendLine($"### ⏪ 1. Eski Şema Hali (`{Path.GetFileName(basePath)}`)");
+        sb.AppendLine("```mermaid");
+        sb.AppendLine(baseMermaid);
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine($"### ⏩ 2. Yeni Şema Hali (`{Path.GetFileName(targetPath)}`)");
+        sb.AppendLine("```mermaid");
+        sb.AppendLine(targetMermaid);
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine("*Bu görsel rapor [SchemaFlow.ai](https://github.com/FiratMugdatoglu/SchemaFlow) tarafından otomatik oluşturulmuştur.*");
+
+        return sb.ToString();
+    }
+
+    private static string GenerateHtmlDiffReport(SchemaDiffResult result, DatabaseSchema baseSchema, DatabaseSchema targetSchema, string basePath, string targetPath)
+    {
+        var mermaidRenderer = new MermaidRenderer();
+        var baseMermaid = mermaidRenderer.Render(baseSchema);
+        var targetMermaid = mermaidRenderer.Render(targetSchema);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("<!DOCTYPE html>");
+        sb.AppendLine("<html lang=\"tr\" class=\"dark\">");
+        sb.AppendLine("<head>");
+        sb.AppendLine("  <meta charset=\"UTF-8\" />");
+        sb.AppendLine("  <title>SchemaFlow Diff Studio - Görsel Karşılaştırma</title>");
+        sb.AppendLine("  <script src=\"https://cdn.tailwindcss.com\"></script>");
+        sb.AppendLine("  <script src=\"https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js\"></script>");
+        sb.AppendLine("  <style>body { background-color: #0b0f17; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; }</style>");
+        sb.AppendLine("</head>");
+        sb.AppendLine("<body class=\"p-6 max-w-6xl mx-auto space-y-8\">");
+
+        // Header
+        sb.AppendLine("  <header class=\"border-b border-slate-800 pb-5 flex items-center justify-between\">");
+        sb.AppendLine("    <div>");
+        sb.AppendLine("      <h1 class=\"text-2xl font-bold text-white flex items-center space-x-2\"><span>🔍 SchemaFlow Görsel Karşılaştırma (Diff)</span></h1>");
+        sb.AppendLine($"     <p class=\"text-xs text-slate-400 mt-1\">Eski: <span class=\"text-cyan-400 font-mono\">{Path.GetFileName(basePath)}</span> ➡️ Yeni: <span class=\"text-cyan-400 font-mono\">{Path.GetFileName(targetPath)}</span></p>");
+        sb.AppendLine("    </div>");
+        var badgeColor = result.HasBreakingChanges ? "bg-rose-500/20 text-rose-400 border-rose-500/30" : "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
+        var badgeText = result.HasBreakingChanges ? $"⚠️ {result.BreakingCount} BREAKING CHANGE" : "✅ TÜMÜ GÜVENLİ";
+        sb.AppendLine($"   <span class=\"px-3 py-1 rounded-full text-xs font-bold border {badgeColor}\">{badgeText}</span>");
+        sb.AppendLine("  </header>");
+
+        // Tablo
+        sb.AppendLine("  <div class=\"bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl\">");
+        sb.AppendLine("    <div class=\"px-5 py-3 bg-slate-800/60 font-semibold text-sm text-slate-200 border-b border-slate-800\">📋 Değişiklik ve Risk Tablosu</div>");
+        sb.AppendLine("    <table class=\"w-full text-left text-xs text-slate-300\">");
+        sb.AppendLine("      <thead class=\"bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800\">");
+        sb.AppendLine("        <tr><th class=\"px-5 py-3\">Durum</th><th class=\"px-4 py-3\">Tür</th><th class=\"px-4 py-3\">Tablo</th><th class=\"px-5 py-3\">Açıklama</th></tr>");
+        sb.AppendLine("      </thead>");
+        sb.AppendLine("      <tbody class=\"divide-y divide-slate-800/60\">");
+        foreach (var change in result.Changes)
+        {
+            var rowBadge = change.IsBreaking ? "<span class=\"px-2 py-0.5 rounded bg-rose-500/20 text-rose-400 font-bold border border-rose-500/30\">🔴 BREAKING</span>" : "<span class=\"px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/30\">🟢 SAFE</span>";
+            sb.AppendLine($"       <tr class=\"hover:bg-slate-800/30\"><td class=\"px-5 py-3\">{rowBadge}</td><td class=\"px-4 py-3 font-mono text-cyan-400\">{change.Type}</td><td class=\"px-4 py-3 font-semibold text-white\">{change.TableName}</td><td class=\"px-5 py-3\">{change.Description}</td></tr>");
+        }
+        sb.AppendLine("      </tbody>");
+        sb.AppendLine("    </table>");
+        sb.AppendLine("  </div>");
+
+        // Yan Yana Diyagramlar (Side-by-Side Before & After)
+        sb.AppendLine("  <div class=\"grid grid-cols-1 md:grid-cols-2 gap-6\">");
+        sb.AppendLine("    <div class=\"bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl\">");
+        sb.AppendLine($"     <h3 class=\"text-sm font-bold text-slate-300 mb-3 flex items-center space-x-2\"><span class=\"w-2.5 h-2.5 rounded-full bg-slate-500\"></span><span>⏪ Eski Şema ({Path.GetFileName(basePath)})</span></h3>");
+        sb.AppendLine("      <div class=\"mermaid bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs\">");
+        sb.AppendLine(baseMermaid);
+        sb.AppendLine("      </div>");
+        sb.AppendLine("    </div>");
+
+        sb.AppendLine("    <div class=\"bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl\">");
+        sb.AppendLine($"     <h3 class=\"text-sm font-bold text-slate-300 mb-3 flex items-center space-x-2\"><span class=\"w-2.5 h-2.5 rounded-full bg-cyan-400\"></span><span>⏩ Yeni Şema ({Path.GetFileName(targetPath)})</span></h3>");
+        sb.AppendLine("      <div class=\"mermaid bg-slate-950 p-4 rounded-lg overflow-x-auto text-xs\">");
+        sb.AppendLine(targetMermaid);
+        sb.AppendLine("      </div>");
+        sb.AppendLine("    </div>");
+        sb.AppendLine("  </div>");
+
+        sb.AppendLine("  <script>mermaid.initialize({ startOnLoad: true, theme: 'dark' });</script>");
+        sb.AppendLine("</body>");
+        sb.AppendLine("</html>");
 
         return sb.ToString();
     }
