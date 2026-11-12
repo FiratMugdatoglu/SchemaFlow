@@ -1,9 +1,11 @@
 using SchemaFlow.Core.Abstractions;
 using SchemaFlow.Core.Models;
 using SchemaFlow.Core.Parsers;
+using SchemaFlow.Core.Renderers;
 using SchemaFlow.Core.Services;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using System.Diagnostics;
 using System.Text;
 
 namespace SchemaFlow.Cli.Commands;
