@@ -33,6 +33,10 @@ public class GenerateSettings : CommandSettings
     [CommandOption("--inject")]
     public bool Inject { get; set; }
 
+    [Description("Şema oluşturulduktan sonra interaktif görsel diyagramı varsayılan tarayıcıda (Chrome/Edge) anında açar.")]
+    [CommandOption("--open")]
+    public bool OpenInBrowser { get; set; }
+
     public override ValidationResult Validate()
     {
         if (string.IsNullOrWhiteSpace(InputPath))

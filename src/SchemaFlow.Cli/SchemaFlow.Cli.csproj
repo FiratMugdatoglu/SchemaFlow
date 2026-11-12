@@ -19,7 +19,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>schemaflow</ToolCommandName>
     <PackageId>SchemaFlow</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>SchemaFlow Team</Authors>
     <Description>Developer-First Universal Database Schema Documentation, Mermaid ER Diagramming, Linter and Breaking Change Diff Engine.</Description>
     <PackageTags>database;schema;mermaid;diff;migrations;documentation;linter;prisma;efcore;django;rails;sql</PackageTags>

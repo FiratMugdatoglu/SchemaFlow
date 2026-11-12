@@ -143,6 +143,41 @@ public class GenerateCommand : AsyncCommand<GenerateSettings>
                 .Border(BoxBorder.Rounded)
                 .BorderColor(Color.Green));
 
+        // 8. Eğer --open parametresi verildiyse tarayıcıda görsel olarak aç
+        if (settings.OpenInBrowser)
+        {
+            try
+            {
+                string targetHtmlPath;
+                if (settings.Format.Equals("html", StringComparison.OrdinalIgnoreCase))
+                {
+                    targetHtmlPath = Path.GetFullPath(settings.OutputPath);
+                }
+                else
+                {
+                    targetHtmlPath = Path.Combine(outputDirectory ?? Directory.GetCurrentDirectory(), "schema_preview.html");
+                    var htmlContent = new HtmlRenderer().Render(schema);
+                    await File.WriteAllTextAsync(targetHtmlPath, htmlContent, cancellationToken);
+                }
+
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = targetHtmlPath,
+                    UseShellExecute = true
+                });
+
+                AnsiConsole.MarkupLine($"\n[bold cyan]🚀 Görsel şema tarayıcınızda açıldı:[/] [underline]{targetHtmlPath}[/]\n");
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"\n[yellow]Uyarı: Tarayıcı otomatik açılamadı ({ex.Message}).[/]");
+            }
+        }
+        else if (!settings.Format.Equals("html", StringComparison.OrdinalIgnoreCase))
+        {
+            AnsiConsole.MarkupLine("[grey]💡 İpucu: Şemayı doğrudan tarayıcıda görselleştirmek için:[/] [cyan]--open[/] [grey]parametresini ekleyebilirsiniz.[/]");
+        }
+
         return 0;
     }
 
