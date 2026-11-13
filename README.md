@@ -49,76 +49,98 @@ dotnet tool install -g SchemaFlow
 
 ---
 
-## 🚀 CLI Usage
+## 🚀 CLI Usage & Quick Start
 
-### 1. Generate Schema Docs & Mermaid ER Diagram (`generate`)
-Point to any migration directory or schema file:
-
-```bash
-# PostgreSQL / MySQL / Flyway / Go (.sql)
-schemaflow generate -i ./database/schema.sql -o ./docs/database.md
-
-# .NET Entity Framework Core (.cs is auto-detected!)
-schemaflow generate -i ./Migrations/InitialCreate.cs -o ./docs/database.md
-
-# TypeScript Prisma (.prisma is auto-detected!)
-schemaflow generate -i ./prisma/schema.prisma -o ./docs/database.md
-
-# Python Django (.py is auto-detected!)
-schemaflow generate -i ./core/migrations/0001_initial.py -o ./docs/database.md
-
-# Java Liquibase (.xml is auto-detected!)
-schemaflow generate -i ./src/main/resources/changelog.xml -o ./docs/database.md
-
-# Ruby on Rails (.rb is auto-detected!)
-schemaflow generate -i ./db/schema.rb -o ./docs/database.md
-```
+| Command | Input | Primary Output | `--open` Browser Experience |
+| :--- | :--- | :--- | :--- |
+| **`schemaflow generate`** | 1 schema file | `docs/database.md` | Interactive Pan/Zoom ERD + Searchable Data Dictionary |
+| **`schemaflow diff`** | 2 schema files | `diff_report.md` | Side-by-Side (Before vs After) visual diagrams |
+| **`schemaflow lint`** | 1 schema file | `lint_report.md` | 100-pt Health Score + Live ERD + 1-Click SQL Quick Fixes |
+| **`schemaflow seed`** | 1 schema file | `seed.sql` | Executable relational mock SQL insert script |
 
 ---
 
-### 2. Smart Schema Diff & Breaking Change Detection (`diff`)
-Compare two schema versions and catch breaking changes before deploying to production:
+### 1. Generate Schema Docs & Interactive ER Diagram (`generate`)
+Transforms your database migration or DDL files into professional Markdown and launches an interactive HTML dashboard:
 
 ```bash
-# Compare two versions with color-coded CLI report
-schemaflow diff -b ./migrations/v1.sql -t ./migrations/v2.sql
+# .NET Entity Framework Core (.cs is auto-detected!) - Opens browser with ER diagram & Data Dictionary
+schemaflow generate -i ./Migrations/InitialCreate.cs -o ./docs/database.md --open
 
-# Fail CI/CD pipeline if destructive breaking changes are found (exit code 1)
-schemaflow diff -b ./v1.sql -t ./v2.sql --fail-on-breaking
+# TypeScript Prisma (.prisma is auto-detected!)
+schemaflow generate -i ./prisma/schema.prisma -o ./docs/database.md --open
 
-# Export markdown report for GitHub PR comments
-schemaflow diff -b ./old_schema.prisma -t ./new_schema.prisma -o ./diff_report.md
+# PostgreSQL / MySQL / Supabase (.sql)
+schemaflow generate -i ./database/schema.sql -o ./docs/database.md --open
+
+# Python Django (.py is auto-detected!)
+schemaflow generate -i ./core/migrations/0001_initial.py -o ./docs/database.md --open
+
+# Java Liquibase (.xml is auto-detected!)
+schemaflow generate -i ./src/main/resources/changelog.xml -o ./docs/database.md --open
+
+# Ruby on Rails (.rb is auto-detected!)
+schemaflow generate -i ./db/schema.rb -o ./docs/database.md --open
 ```
+
+**Outputs:**
+* 🌐 **Browser (`--open`):** Interactive canvas with zoom/pan ER diagram and tabbed searchable Data Dictionary.
+* 📄 **File (`-o`):** Beautiful GitHub/GitLab-ready Markdown with Mermaid.js diagram.
+
+---
+
+### 2. Smart Schema Diff & Breaking Change Detector (`diff`)
+Compare two schema versions, catch breaking changes, and visualize structural changes side-by-side:
+
+```bash
+# Compare versions and launch side-by-side Before/After visual diagrams in browser
+schemaflow diff -b ./v1_schema.sql -t ./v2_schema.sql -o ./diff_report.md --open
+
+# Block CI/CD deployments if destructive breaking changes are detected (exit code 1)
+schemaflow diff -b ./v1.sql -t ./v2.sql --fail-on-breaking
+```
+
+**Outputs:**
+* 💻 **Terminal:** Color-coded table of 🔴 BREAKING and 🟢 SAFE schema modifications.
+* 🌐 **Browser (`--open`):** Dual-column visual diagram comparing the legacy vs new architecture.
+* 📄 **File (`-o`):** Complete Markdown diff report with Before/After Mermaid diagrams.
 
 ---
 
 ### 3. Database Health & Anti-Pattern Linter (`lint`)
-Audit your schemas against critical architectural rules and performance bottlenecks:
+Audits your schemas for missing Primary Keys, unindexed Foreign Keys, and reserved keyword collisions in under 50ms:
 
 ```bash
-schemaflow lint -i ./schema.sql
+# Audit schema and launch visual Health Dashboard with instant SQL fixes
+schemaflow lint -i ./schema.sql --open
 
-# Fail CI/CD if warnings or errors are present
-schemaflow lint -i ./schema.prisma --fail-on-warnings
+# Fail CI/CD pipelines if critical architectural errors are found
+schemaflow lint -i ./schema.sql --fail-on-errors
 ```
 
+**Outputs:**
+* 🌐 **Browser (`--open`):** Overall Health Score (0-100), visual ER diagram, risk cards, and **ready-to-run SQL Quick-Fix snippets**.
+* 💻 **Terminal:** Severity-ranked audit table (`🔴 ERROR`, `🟡 WARN`, `🔵 INFO`).
+
 **Built-in Rules:**
-* 🔴 **SF001:** Missing Primary Key detection.
-* 🟡 **SF002:** Unindexed Foreign Key detection (prevents table lockouts during JOINs and CASCADE operations).
-* 🟡 **SF003:** Reserved SQL keyword collision detection (`user`, `order`, `group`, etc.).
+* 🔴 **SF001:** Missing Primary Key detection (uniquely addresses data integrity).
+* 🟡 **SF002:** Unindexed Foreign Key detection (prevents catastrophic table locks during JOINs and CASCADE operations).
+* 🟡 **SF003:** Reserved SQL keyword collisions (`order`, `user`, `group`, etc.).
 * 🔴 **SF004:** Nullable Primary Key column warning.
-* 🔵 **SF005:** Unbounded text types indexed warning (`TEXT`, `VARCHAR(MAX)`).
+* 🔵 **SF005:** Unbounded text type indexed warning (`TEXT`, `VARCHAR(MAX)`).
 
 ---
 
 ### 4. Smart Relational Mock Seed Generator (`seed`)
-Generate foreign-key aligned mock data for test environments:
+Generates valid, relational fake test data respecting Foreign Key hierarchies:
 
 ```bash
-schemaflow seed -i ./schema.prisma --count 25 --output seed.sql
+# Generate 10 relational mock rows per table
+schemaflow seed -i ./Migrations/InitialCreate.cs -n 10 -o seed.sql
 ```
 
-SchemaFlow resolves the topological dependency tree (parent tables first, child tables second) and automatically populates realistic mock values (emails, names, dates, amounts, status flags).
+**Outputs:**
+* 📄 **`seed.sql`:** Ready-to-execute SQL file populated with valid emails, currency values, dates, and matched Foreign Key references. Ready to pipe directly into `psql` or `mysql`.
 
 ---
 
