@@ -219,14 +219,52 @@ CREATE TABLE order_items (
       alert("Mermaid code copied to clipboard!");
     }
 
-    function exportSvg() {
+    function getExportSvgData() {
       const svg = document.querySelector('#diagram-container svg');
       if (!svg) {
         alert("Please visualize a schema first!");
-        return;
+        return null;
       }
-      const svgData = new XMLSerializer().serializeToString(svg);
-      const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+
+      const viewport = svg.querySelector('.svg-pan-zoom_viewport') || svg;
+      const bbox = viewport.getBBox();
+
+      const clone = svg.cloneNode(true);
+      const cloneViewport = clone.querySelector('.svg-pan-zoom_viewport');
+      if (cloneViewport) {
+        cloneViewport.removeAttribute('transform');
+      }
+
+      const pad = 30;
+      const x = bbox.x - pad;
+      const y = bbox.y - pad;
+      const width = Math.max(Math.ceil(bbox.width + pad * 2), 200);
+      const height = Math.max(Math.ceil(bbox.height + pad * 2), 150);
+
+      clone.setAttribute('viewBox', `${x} ${y} ${width} ${height}`);
+      clone.setAttribute('width', width);
+      clone.setAttribute('height', height);
+      clone.style.width = width + 'px';
+      clone.style.height = height + 'px';
+      clone.style.backgroundColor = '#0b0f17';
+
+      const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      bgRect.setAttribute('x', x);
+      bgRect.setAttribute('y', y);
+      bgRect.setAttribute('width', width);
+      bgRect.setAttribute('height', height);
+      bgRect.setAttribute('fill', '#0b0f17');
+      clone.insertBefore(bgRect, clone.firstChild);
+
+      const svgData = new XMLSerializer().serializeToString(clone);
+      return { svgData, width, height };
+    }
+
+    function exportSvg() {
+      const data = getExportSvgData();
+      if (!data) return;
+
+      const blob = new Blob([data.svgData], { type: "image/svg+xml;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -238,30 +276,24 @@ CREATE TABLE order_items (
     }
 
     function exportPng() {
-      const svg = document.querySelector('#diagram-container svg');
-      if (!svg) {
-        alert("Please visualize a schema first!");
-        return;
-      }
-      const svgData = new XMLSerializer().serializeToString(svg);
-      const canvas = document.createElement("canvas");
-      const bbox = svg.getBoundingClientRect();
+      const data = getExportSvgData();
+      if (!data) return;
+
       const scale = 2; // High-resolution 2x scale
-      const width = (bbox.width || 900) * scale;
-      const height = (bbox.height || 600) * scale;
-      canvas.width = width;
-      canvas.height = height;
+      const canvas = document.createElement("canvas");
+      canvas.width = data.width * scale;
+      canvas.height = data.height * scale;
 
       const ctx = canvas.getContext("2d");
-      ctx.fillStyle = "#090d16";
-      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = "#0b0f17";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       const img = new Image();
-      const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+      const blob = new Blob([data.svgData], { type: "image/svg+xml;charset=utf-8" });
       const url = URL.createObjectURL(blob);
 
       img.onload = () => {
-        ctx.drawImage(img, 0, 0, width, height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         URL.revokeObjectURL(url);
         const pngUrl = canvas.toDataURL("image/png");
         const a = document.createElement("a");
@@ -314,6 +346,7 @@ CREATE TABLE order_items (
               <div class="text-[11px] text-slate-500">No credit card required</div>
             </div>
             <ul class="text-xs text-slate-300 space-y-2 pt-2 border-t border-slate-800/80">
+              <li class="flex items-center space-x-2"><span class="text-emerald-400">✓</span><span>Unlimited Web Studio & High-Res SVG/PNG Exports</span></li>
               <li class="flex items-center space-x-2"><span class="text-emerald-400">✓</span><span>Unlimited Local CLI (`generate`, `diff`, `lint`, `seed`)</span></li>
               <li class="flex items-center space-x-2"><span class="text-emerald-400">✓</span><span>100% Offline & zero database connection needed</span></li>
               <li class="flex items-center space-x-2"><span class="text-emerald-400">✓</span><span>Markdown & Mermaid ER diagrams</span></li>
@@ -338,7 +371,7 @@ CREATE TABLE order_items (
               <li class="flex items-center space-x-2"><span class="text-cyan-400">✓</span><span>All Community features</span></li>
               <li class="flex items-center space-x-2"><span class="text-cyan-400 font-bold">★</span><span><strong>GitHub Actions PR Safety Bot</strong> (Personal Repos, Unlimited PRs)</span></li>
               <li class="flex items-center space-x-2"><span class="text-cyan-400 font-bold">★</span><span><strong>Breaking Change Merge Blocker</strong> on your PRs</span></li>
-              <li class="flex items-center space-x-2"><span class="text-cyan-400">✓</span><span>Unlimited Web Studio & High-Res SVG/PNG Exports</span></li>
+              <li class="flex items-center space-x-2"><span class="text-cyan-400 font-bold">★</span><span>Automated Visual Before/After Diff PR Comments</span></li>
               <li class="flex items-center space-x-2"><span class="text-cyan-400">✓</span><span>1-Click Ready SQL Quick-Fix snippets</span></li>
             </ul>
           </div>
@@ -359,7 +392,7 @@ CREATE TABLE order_items (
             </div>
             <ul class="text-xs text-slate-200 space-y-2 pt-2 border-t border-slate-800/80">
               <li class="flex items-center space-x-2"><span class="text-amber-400 font-bold">★</span><span class="font-semibold text-white">GitHub Actions PR Safety Bot (Unlimited)</span></li>
-              <li class="flex items-center space-x-2"><span class="text-amber-400 font-bold">★</span><span>Company GitHub Organization Support</span></li>
+              <li class="flex items-center space-x-2"><span class="text-amber-400 font-bold">★</span><span><strong>Company GitHub Organization Support</strong></span></li>
               <li class="flex items-center space-x-2"><span class="text-amber-400 font-bold">★</span><span><strong>Automated Breaking Change Merge Blocker</strong> in CI/CD</span></li>
               <li class="flex items-center space-x-2"><span class="text-amber-400 font-bold">★</span><span>Automated Visual Before/After Diff Comments on every PR</span></li>
               <li class="flex items-center space-x-2"><span class="text-cyan-400">✓</span><span>Shared Team Architectural Rules & Priority Support</span></li>
