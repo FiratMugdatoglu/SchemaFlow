@@ -24,6 +24,9 @@ public class LintCommand : AsyncCommand<LintSettings>
 
         AnsiConsole.MarkupLine("[bold grey]Veritabanı Şema Sağlık & Anti-Pattern Denetleyicisi[/]\n");
 
+        var isEfMigration = Path.GetExtension(settings.InputPath).Equals(".cs", StringComparison.OrdinalIgnoreCase);
+        MigrationAnalysisResult? migrationResult = null;
+
         var parser = ResolveParserForFile(settings.InputPath);
         DatabaseSchema schema = null!;
 
@@ -34,11 +37,50 @@ public class LintCommand : AsyncCommand<LintSettings>
             {
                 var content = await File.ReadAllTextAsync(settings.InputPath, cancellationToken);
                 schema = await parser.ParseSqlAsync(content, cancellationToken);
+
+                if (isEfMigration)
+                {
+                    var migrationAnalyzer = new EfCoreMigrationAnalyzer();
+                    migrationResult = migrationAnalyzer.AnalyzeMigrationCode(content);
+                }
             });
+
+        // 1. EF Core Migration Operasyonları (Roslyn AST Özeti)
+        if (migrationResult != null && migrationResult.Operations.Count > 0)
+        {
+            var opTable = new Spectre.Console.Table();
+            opTable.Border(TableBorder.Rounded);
+            opTable.AddColumn(new TableColumn("[bold]Satır[/]").Centered());
+            opTable.AddColumn(new TableColumn("[bold]Operasyon[/]"));
+            opTable.AddColumn(new TableColumn("[bold]Tablo[/]"));
+            opTable.AddColumn(new TableColumn("[bold]Açıklama[/]"));
+
+            foreach (var op in migrationResult.Operations)
+            {
+                var color = op.IsDestructive ? "red" : "cyan";
+                var icon = op.IsDestructive ? "⚠️" : "⚡";
+                opTable.AddRow(
+                    $"[grey]{op.LineNumber}[/]",
+                    $"[{color}]{icon} {op.Kind}[/]",
+                    $"[bold white]{op.TableName}[/]",
+                    op.Description.EscapeMarkup()
+                );
+            }
+
+            AnsiConsole.MarkupLine("[bold cyan]🔍 EF Core Migration Operasyonları (Roslyn AST Analizi):[/]");
+            AnsiConsole.Write(opTable);
+            AnsiConsole.WriteLine();
+        }
 
         // Linter Motorunu Çalıştır
         var linter = new SchemaLinterEngine();
         var issues = linter.Analyze(schema);
+
+        // Eğer EF Core Migration ise, tespit edilen kuralları birleştir
+        if (migrationResult != null && migrationResult.Issues.Count > 0)
+        {
+            issues.InsertRange(0, migrationResult.Issues);
+        }
 
         var errorCount = issues.Count(i => i.Severity == LintSeverity.Error);
         var warningCount = issues.Count(i => i.Severity == LintSeverity.Warning);
@@ -101,6 +143,38 @@ public class LintCommand : AsyncCommand<LintSettings>
                 .Header(panelHeader)
                 .Border(BoxBorder.Rounded)
                 .BorderColor(panelColor));
+
+        // Expand & Contract Planı Varsa Göster
+        if (migrationResult != null && migrationResult.ExpandContractPlans.Count > 0)
+        {
+            AnsiConsole.WriteLine();
+            foreach (var plan in migrationResult.ExpandContractPlans)
+            {
+                var planGrid = new Grid();
+                planGrid.AddColumn();
+                planGrid.AddRow($"[bold yellow]Tablo:[/] [white]{plan.TableName.EscapeMarkup()}[/] | [bold red]Silinen:[/] {plan.DroppedColumn.EscapeMarkup()} ➡️ [bold green]Yeni:[/] {plan.AddedColumn.EscapeMarkup()}");
+                planGrid.AddRow($"[grey]{plan.Reason.EscapeMarkup()}[/]");
+                planGrid.AddRow("\n[bold cyan]Önerilen Sıfır Kesinti (Zero-Downtime) Adımları:[/]");
+                foreach (var step in plan.PhaseSteps)
+                {
+                    planGrid.AddRow($"  [green]•[/] {step.EscapeMarkup()}");
+                }
+                if (!string.IsNullOrEmpty(plan.SuggestedSqlBackfill))
+                {
+                    planGrid.AddRow($"\n[grey]Örnek SQL Backfill:[/] [yellow]{plan.SuggestedSqlBackfill.EscapeMarkup()}[/]");
+                }
+                if (!string.IsNullOrEmpty(plan.SuggestedEfCoreCode))
+                {
+                    planGrid.AddRow($"[grey]Alternatif C# EF Core Kodu:[/] [cyan]{plan.SuggestedEfCoreCode.EscapeMarkup()}[/]");
+                }
+
+                AnsiConsole.Write(
+                    new Panel(planGrid)
+                        .Header("[bold yellow]🔄 EXPAND & CONTRACT TAVSİYESİ (VERİ KAYBINA KARŞI KORUMA)[/]")
+                        .Border(BoxBorder.Double)
+                        .BorderColor(Color.Yellow));
+            }
+        }
 
         // Opsiyonel Markdown Çıktısı veya Tarayıcıda Açma
         if (!string.IsNullOrEmpty(settings.OutputPath) || settings.OpenInBrowser)

@@ -27,3 +27,6 @@ ehthumbs.db
 
 ## Test outputs & local artifacts
 *.log
+*.nupkg
+nupkg/
+

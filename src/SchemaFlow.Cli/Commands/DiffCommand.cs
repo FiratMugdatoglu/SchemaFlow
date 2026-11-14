@@ -106,6 +106,38 @@ public class DiffCommand : AsyncCommand<DiffSettings>
                 .Border(BoxBorder.Rounded)
                 .BorderColor(panelColor));
 
+        // 5.1 Expand & Contract Özel Uyarısı
+        if (diffResult.ExpandContractPlans.Count > 0)
+        {
+            AnsiConsole.WriteLine();
+            foreach (var plan in diffResult.ExpandContractPlans)
+            {
+                var planGrid = new Grid();
+                planGrid.AddColumn();
+                planGrid.AddRow($"[bold yellow]Tablo:[/] [white]{plan.TableName.EscapeMarkup()}[/] | [bold red]Silinen:[/] {plan.DroppedColumn.EscapeMarkup()} ➡️ [bold green]Yeni:[/] {plan.AddedColumn.EscapeMarkup()}");
+                planGrid.AddRow($"[grey]{plan.Reason.EscapeMarkup()}[/]");
+                planGrid.AddRow("\n[bold cyan]Önerilen Sıfır Kesinti (Zero-Downtime) Adımları:[/]");
+                foreach (var step in plan.PhaseSteps)
+                {
+                    planGrid.AddRow($"  [green]•[/] {step.EscapeMarkup()}");
+                }
+                if (!string.IsNullOrEmpty(plan.SuggestedSqlBackfill))
+                {
+                    planGrid.AddRow($"\n[grey]Örnek SQL Backfill:[/] [yellow]{plan.SuggestedSqlBackfill.EscapeMarkup()}[/]");
+                }
+                if (!string.IsNullOrEmpty(plan.SuggestedEfCoreCode))
+                {
+                    planGrid.AddRow($"[grey]Alternatif C# EF Core Kodu:[/] [cyan]{plan.SuggestedEfCoreCode.EscapeMarkup()}[/]");
+                }
+
+                AnsiConsole.Write(
+                    new Panel(planGrid)
+                        .Header("[bold yellow]🔄 EXPAND & CONTRACT TAVSİYESİ (VERİ KAYBINA KARŞI KORUMA)[/]")
+                        .Border(BoxBorder.Double)
+                        .BorderColor(Color.Yellow));
+            }
+        }
+
         // 6. Opsiyonel Markdown Çıktısı veya Tarayıcıda Açma
         if (!string.IsNullOrEmpty(settings.OutputPath) || settings.OpenInBrowser)
         {
@@ -202,6 +234,32 @@ public class DiffCommand : AsyncCommand<DiffSettings>
             sb.AppendLine($"| {badge} | `{change.Type}` | `{change.TableName}` | {change.Description} |");
         }
 
+        if (result.ExpandContractPlans.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("### 🔄 Sıfır Kesinti (Zero-Downtime) Expand & Contract Geçiş Planı");
+            sb.AppendLine("> ⚠️ **KRİTİK VERİ KAYBI UYARISI:** Aşağıdaki tablolarda sütun silinirken aynı anda yeni sütun eklendiği tespit edildi. Canlı veritabanındaki verilerin silinmesini önlemek için önerilen geçiş planı:");
+            sb.AppendLine();
+            foreach (var plan in result.ExpandContractPlans)
+            {
+                sb.AppendLine($"#### 📌 Tablo: `{plan.TableName}` (`{plan.DroppedColumn}` ➡️ `{plan.AddedColumn}`)");
+                sb.AppendLine($"- **Risk Gerekçesi:** {plan.Reason}");
+                sb.AppendLine("- **Önerilen Geçiş Adımları:**");
+                foreach (var step in plan.PhaseSteps)
+                {
+                    sb.AppendLine($"  - {step}");
+                }
+                if (!string.IsNullOrEmpty(plan.SuggestedSqlBackfill))
+                {
+                    sb.AppendLine($"- **Örnek SQL Backfill Komutu:**");
+                    sb.AppendLine("  ```sql");
+                    sb.AppendLine($"  {plan.SuggestedSqlBackfill}");
+                    sb.AppendLine("  ```");
+                }
+                sb.AppendLine();
+            }
+        }
+
         sb.AppendLine();
         sb.AppendLine("---");
         sb.AppendLine("## 📊 Görsel Mimari Karşılaştırması (Before vs After)");
@@ -250,6 +308,35 @@ public class DiffCommand : AsyncCommand<DiffSettings>
         var badgeText = result.HasBreakingChanges ? $"⚠️ {result.BreakingCount} BREAKING CHANGE" : "✅ TÜMÜ GÜVENLİ";
         sb.AppendLine($"   <span class=\"px-3 py-1 rounded-full text-xs font-bold border {badgeColor}\">{badgeText}</span>");
         sb.AppendLine("  </header>");
+
+        // Expand & Contract Banner
+        if (result.ExpandContractPlans.Count > 0)
+        {
+            sb.AppendLine("  <div class=\"bg-amber-950/30 border border-amber-600/40 rounded-xl p-5 shadow-xl space-y-4\">");
+            sb.AppendLine("    <div class=\"flex items-center space-x-2 text-amber-400 font-bold text-sm\">");
+            sb.AppendLine("      <span class=\"text-lg\">🔄</span><span>Sıfır Kesinti (Zero-Downtime) Expand & Contract Geçiş Planı</span>");
+            sb.AppendLine("    </div>");
+            sb.AppendLine("    <p class=\"text-xs text-amber-200/80\">Mevcut verilerin silinmesini önlemek için önerilen çok aşamalı geçiş adımları:</p>");
+            foreach (var plan in result.ExpandContractPlans)
+            {
+                sb.AppendLine("    <div class=\"bg-slate-900/80 border border-amber-600/20 rounded-lg p-4 space-y-2\">");
+                sb.AppendLine($"     <div class=\"text-xs font-semibold text-white flex items-center justify-between\"><span>Tablo: <span class=\"text-cyan-400 font-mono\">{plan.TableName}</span></span><span><span class=\"text-rose-400 font-mono\">{plan.DroppedColumn}</span> ➡️ <span class=\"text-emerald-400 font-mono\">{plan.AddedColumn}</span></span></div>");
+                sb.AppendLine($"     <p class=\"text-[11px] text-slate-400\">{plan.Reason}</p>");
+                sb.AppendLine("      <div class=\"text-[11px] text-slate-300 font-medium mt-2\">Adımlar:</div>");
+                sb.AppendLine("      <ul class=\"list-disc list-inside text-[11px] text-slate-300 space-y-1\">");
+                foreach (var step in plan.PhaseSteps)
+                {
+                    sb.AppendLine($"       <li>{step}</li>");
+                }
+                sb.AppendLine("      </ul>");
+                if (!string.IsNullOrEmpty(plan.SuggestedSqlBackfill))
+                {
+                    sb.AppendLine($"     <pre class=\"bg-slate-950 p-2 rounded text-[10px] font-mono text-amber-300 overflow-x-auto mt-2\">{plan.SuggestedSqlBackfill}</pre>");
+                }
+                sb.AppendLine("    </div>");
+            }
+            sb.AppendLine("  </div>");
+        }
 
         // Tablo
         sb.AppendLine("  <div class=\"bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl\">");

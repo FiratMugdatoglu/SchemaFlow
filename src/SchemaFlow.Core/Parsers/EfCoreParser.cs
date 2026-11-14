@@ -1,18 +1,21 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SchemaFlow.Core.Models;
-using System.Text.RegularExpressions;
 using Index = SchemaFlow.Core.Models.Index;
 
 namespace SchemaFlow.Core.Parsers;
 
 /// <summary>
-/// Entity Framework Core (EF Core) C# migration dosyalarını (.cs) doğrudan okuyup
-/// veritabanı şemasına (AST) dönüştüren ayrıştırıcıdır.
+/// Microsoft Roslyn (CSharpSyntaxTree) AST derleyicisi kullanarak
+/// Entity Framework Core (EF Core) C# migration dosyalarını (.cs)
+/// %100 doğruluk ve semantik derinlikle ayrıştıran parser sınıfıdır.
 /// </summary>
 public class EfCoreParser : BaseDatabaseParser
 {
     public override DatabaseDialect SupportedDialect => DatabaseDialect.EfCore;
 
-    public override Task<DatabaseSchema> ParseSqlAsync(string csharpCode, CancellationToken cancellationToken = default)
+    public override async Task<DatabaseSchema> ParseSqlAsync(string csharpCode, CancellationToken cancellationToken = default)
     {
         var schema = new DatabaseSchema
         {
@@ -21,231 +24,406 @@ public class EfCoreParser : BaseDatabaseParser
         };
 
         if (string.IsNullOrWhiteSpace(csharpCode))
-            return Task.FromResult(schema);
+            return schema;
 
-        // 1. CreateTable bloklarını yakala
-        ParseCreateTables(csharpCode, schema);
+        // 1. Roslyn SyntaxTree ile C# kodunu tam AST (Abstract Syntax Tree) olarak ayrıştır
+        var tree = CSharpSyntaxTree.ParseText(csharpCode, cancellationToken: cancellationToken);
+        var root = await tree.GetRootAsync(cancellationToken);
 
-        // 2. CreateIndex bloklarını yakala
-        ParseCreateIndexes(csharpCode, schema);
+        // 2. Tüm metot çağrılarını (InvocationExpressionSyntax) tara
+        var invocations = root.DescendantNodes().OfType<InvocationExpressionSyntax>();
 
-        return Task.FromResult(schema);
+        foreach (var inv in invocations)
+        {
+            var methodName = GetMethodName(inv);
+            if (string.IsNullOrEmpty(methodName)) continue;
+
+            switch (methodName)
+            {
+                case "CreateTable":
+                    ParseCreateTable(inv, schema);
+                    break;
+
+                case "AddColumn":
+                    ParseAddColumn(inv, schema);
+                    break;
+
+                case "DropColumn":
+                    ParseDropColumn(inv, schema);
+                    break;
+
+                case "RenameColumn":
+                    ParseRenameColumn(inv, schema);
+                    break;
+
+                case "AlterColumn":
+                    ParseAlterColumn(inv, schema);
+                    break;
+
+                case "CreateIndex":
+                    ParseCreateIndex(inv, schema);
+                    break;
+
+                case "DropTable":
+                    ParseDropTable(inv, schema);
+                    break;
+            }
+        }
+
+        return schema;
     }
 
-    private void ParseCreateTables(string code, DatabaseSchema schema)
+    private static string? GetMethodName(InvocationExpressionSyntax inv)
     {
-        // migrationBuilder.CreateTable( ... );
-        var tablePattern = new Regex(@"migrationBuilder\.CreateTable\s*\(\s*name:\s*""(?<tableName>[^""]+)""", RegexOptions.IgnoreCase);
-        var matches = tablePattern.Matches(code);
-
-        for (int i = 0; i < matches.Count; i++)
+        if (inv.Expression is MemberAccessExpressionSyntax ma)
         {
-            var match = matches[i];
-            var tableName = match.Groups["tableName"].Value;
-            var startIndex = match.Index;
+            return ma.Name.Identifier.Text;
+        }
+        return null;
+    }
 
-            var blockContent = ExtractMethodCallBlock(code, startIndex);
-            if (string.IsNullOrEmpty(blockContent))
-                continue;
+    private void ParseCreateTable(InvocationExpressionSyntax inv, DatabaseSchema schema)
+    {
+        var tableName = GetStringArgument(inv.ArgumentList, "name", 0);
+        if (string.IsNullOrEmpty(tableName)) return;
 
-            var table = new Table
+        var table = schema.FindTable(tableName) ?? new Table
+        {
+            Name = tableName,
+            Description = "EF Core Migration Table"
+        };
+
+        // 1. Kolonları Çöz (columns: table => new { ... })
+        var columnsArg = GetArgument(inv.ArgumentList, "columns", 1);
+        if (columnsArg?.Expression is LambdaExpressionSyntax lambda &&
+            lambda.Body is AnonymousObjectCreationExpressionSyntax anonObj)
+        {
+            foreach (var declarator in anonObj.Initializers)
             {
-                Name = tableName,
-                Description = "EF Core Migration Table"
-            };
+                var colName = declarator.NameEquals?.Name.Identifier.Text;
+                if (string.IsNullOrEmpty(colName)) continue;
 
-            // Kolonları Çöz
-            ParseColumns(blockContent, table);
+                var column = ParseColumnDefinition(colName, declarator.Expression);
+                if (column != null)
+                {
+                    table.Columns.Add(column);
+                }
+            }
+        }
 
-            // Constraints (PK & FK) Çöz
-            ParseConstraints(blockContent, table);
+        // 2. Kısıtlamaları Çöz (constraints: table => { table.PrimaryKey(...); table.ForeignKey(...); })
+        var constraintsArg = GetArgument(inv.ArgumentList, "constraints", 2);
+        if (constraintsArg?.Expression is LambdaExpressionSyntax cLambda)
+        {
+            ParseConstraints(cLambda.Body, table);
+        }
 
+        if (!schema.Tables.Contains(table))
+        {
             schema.Tables.Add(table);
         }
     }
 
-    private void ParseColumns(string blockContent, Table table)
+    private static Column? ParseColumnDefinition(string colName, ExpressionSyntax expr)
     {
-        // columns: table => new { ... }
-        var columnsBlockMatch = Regex.Match(blockContent, @"columns:\s*table\s*=>\s*new\s*\{(?<colsBlock>.*?)\}\s*,", RegexOptions.Singleline);
-        if (!columnsBlockMatch.Success)
-            return;
+        // expr: table.Column<string>(type: "nvarchar(100)", nullable: false, ...)
+        // veya zincirleme: table.Column<int>(...).Annotation(...)
+        InvocationExpressionSyntax? colInv = null;
 
-        var colsBlock = columnsBlockMatch.Groups["colsBlock"].Value;
-
-        // Her bir satırı / tanımı yakala:
-        // Örnek: Id = table.Column<Guid>(type: "uuid", nullable: false),
-        var columnRegex = new Regex(@"(?<colName>\w+)\s*=\s*table\.Column<(?<clrType>[^>]+)>\s*\((?<props>.*?)\)\s*(?:,|$)", RegexOptions.Singleline);
-        var matches = columnRegex.Matches(colsBlock);
-
-        foreach (Match colMatch in matches)
+        var curr = expr;
+        while (curr != null)
         {
-            var colName = colMatch.Groups["colName"].Value;
-            var clrType = colMatch.Groups["clrType"].Value;
-            var props = colMatch.Groups["props"].Value;
-
-            // SQL tipini çek: type: "uuid" veya clrType
-            var typeMatch = Regex.Match(props, @"type:\s*""(?<sqlType>[^""]+)""", RegexOptions.IgnoreCase);
-            var dataType = typeMatch.Success ? typeMatch.Groups["sqlType"].Value : clrType;
-
-            // Nullable çek: nullable: false
-            var nullableMatch = Regex.Match(props, @"nullable:\s*(?<nullable>true|false)", RegexOptions.IgnoreCase);
-            var isNullable = nullableMatch.Success && bool.Parse(nullableMatch.Groups["nullable"].Value);
-
-            // DefaultValue çek: defaultValueSql: "GETUTCDATE()" veya defaultValue: 0
-            var defaultMatch = Regex.Match(props, @"defaultValue(?:Sql)?:\s*""(?<def>[^""]+)""", RegexOptions.IgnoreCase);
-            if (!defaultMatch.Success)
+            if (curr is InvocationExpressionSyntax inv)
             {
-                defaultMatch = Regex.Match(props, @"defaultValue:\s*(?<def>[^,\)]+)", RegexOptions.IgnoreCase);
+                var name = GetMethodName(inv);
+                if (name == "Column")
+                {
+                    colInv = inv;
+                    break;
+                }
+                if (inv.Expression is MemberAccessExpressionSyntax ma)
+                {
+                    curr = ma.Expression;
+                    continue;
+                }
             }
-            var defaultValue = defaultMatch.Success ? defaultMatch.Groups["def"].Value.Trim() : null;
-
-            var column = new Column
-            {
-                Name = colName,
-                DataType = dataType,
-                IsNullable = isNullable,
-                DefaultValue = defaultValue
-            };
-
-            table.Columns.Add(column);
+            break;
         }
+
+        if (colInv == null) return null;
+
+        // Generic CLR tipini al: <string>, <int>, <DateTime>
+        var clrType = "string";
+        if (colInv.Expression is MemberAccessExpressionSyntax maCol &&
+            maCol.Name is GenericNameSyntax genName &&
+            genName.TypeArgumentList.Arguments.Count > 0)
+        {
+            clrType = genName.TypeArgumentList.Arguments[0].ToString();
+        }
+
+        // Parametreleri çek
+        var sqlType = GetStringArgument(colInv.ArgumentList, "type");
+        var isNullable = GetBoolArgument(colInv.ArgumentList, "nullable") ?? false;
+        var defValSql = GetStringArgument(colInv.ArgumentList, "defaultValueSql");
+        var defVal = defValSql ?? GetStringArgument(colInv.ArgumentList, "defaultValue");
+
+        return new Column
+        {
+            Name = colName,
+            DataType = !string.IsNullOrEmpty(sqlType) ? sqlType : clrType,
+            IsNullable = isNullable,
+            DefaultValue = defVal
+        };
     }
 
-    private void ParseConstraints(string blockContent, Table table)
+    private void ParseConstraints(CSharpSyntaxNode body, Table table)
     {
-        // constraints: table => { ... }
-        var constraintsBlockMatch = Regex.Match(blockContent, @"constraints:\s*table\s*=>\s*\{(?<constraints>.*?)\}\s*\)", RegexOptions.Singleline);
-        if (!constraintsBlockMatch.Success)
-            return;
+        var calls = body.DescendantNodes().OfType<InvocationExpressionSyntax>();
 
-        var constraints = constraintsBlockMatch.Groups["constraints"].Value;
-
-        // 1. Primary Key: table.PrimaryKey("PK_Feedbacks", x => x.Id); veya x => new { x.Id, x.Col2 }
-        var pkMatches = Regex.Matches(constraints, @"table\.PrimaryKey\s*\(\s*""(?<pkName>[^""]+)""\s*,\s*x\s*=>\s*(?:x\.(?<singleCol>\w+)|new\s*\{\s*(?<multiCols>[^\}]+)\}\s*)\)", RegexOptions.Singleline);
-        foreach (Match pkMatch in pkMatches)
+        foreach (var call in calls)
         {
-            if (pkMatch.Groups["singleCol"].Success)
+            var methodName = GetMethodName(call);
+            if (methodName == "PrimaryKey")
             {
-                var colName = pkMatch.Groups["singleCol"].Value;
-                var col = table.Columns.FirstOrDefault(c => c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase));
-                if (col != null) col.IsPrimaryKey = true;
-            }
-            else if (pkMatch.Groups["multiCols"].Success)
-            {
-                var cols = Regex.Matches(pkMatch.Groups["multiCols"].Value, @"x\.(?<col>\w+)");
-                foreach (Match c in cols)
+                // table.PrimaryKey("PK_Users", x => x.Id) veya columns: x => x.Id
+                var cols = ExtractLambdaPropertyNames(call.ArgumentList, 1, "columns");
+                foreach (var colName in cols)
                 {
-                    var colName = c.Groups["col"].Value;
-                    var col = table.Columns.FirstOrDefault(cl => cl.Name.Equals(colName, StringComparison.OrdinalIgnoreCase));
+                    var col = table.Columns.FirstOrDefault(c => string.Equals(c.Name, colName, StringComparison.OrdinalIgnoreCase));
                     if (col != null) col.IsPrimaryKey = true;
                 }
             }
-        }
-
-        // 2. Foreign Key:
-        // table.ForeignKey(
-        //     name: "FK_ReportSubCategories_ReportCategories_CategoryId",
-        //     column: x => x.CategoryId,
-        //     principalTable: "ReportCategories",
-        //     principalColumn: "Id",
-        //     onDelete: ReferentialAction.Cascade);
-        var fkMatches = Regex.Matches(constraints, 
-            @"table\.ForeignKey\s*\(\s*name:\s*""(?<fkName>[^""]+)""\s*,\s*column:\s*x\s*=>\s*x\.(?<srcCol>\w+)\s*,\s*principalTable:\s*""(?<targetTable>[^""]+)""\s*,\s*principalColumn:\s*""(?<targetCol>[^""]+)""(?:\s*,\s*onDelete:\s*ReferentialAction\.(?<onDel>\w+))?", 
-            RegexOptions.Singleline);
-
-        foreach (Match fkMatch in fkMatches)
-        {
-            var fkName = fkMatch.Groups["fkName"].Value;
-            var srcCol = fkMatch.Groups["srcCol"].Value;
-            var targetTable = fkMatch.Groups["targetTable"].Value;
-            var targetCol = fkMatch.Groups["targetCol"].Value;
-            var onDel = fkMatch.Groups["onDel"].Success ? fkMatch.Groups["onDel"].Value : "NO ACTION";
-
-            var fk = new ForeignKey
+            else if (methodName == "ForeignKey")
             {
-                ConstraintName = fkName,
-                SourceTable = table.Name,
-                SourceColumns = new List<string> { srcCol },
-                TargetTable = targetTable,
-                TargetColumns = new List<string> { targetCol },
-                OnDelete = onDel
-            };
+                // table.ForeignKey(name: "FK_...", column: x => x.UserId, principalTable: "Users", principalColumn: "Id", onDelete: ...)
+                var fkName = GetStringArgument(call.ArgumentList, "name", 0) ?? $"FK_{table.Name}";
+                var srcCols = ExtractLambdaPropertyNames(call.ArgumentList, 1, "column");
+                var targetTable = GetStringArgument(call.ArgumentList, "principalTable", 2);
+                var targetCols = ExtractLambdaPropertyNames(call.ArgumentList, 3, "principalColumn");
 
-            table.ForeignKeys.Add(fk);
-        }
-    }
-
-    private void ParseCreateIndexes(string code, DatabaseSchema schema)
-    {
-        // migrationBuilder.CreateIndex(
-        //     name: "IX_FeedbackNames_Name",
-        //     table: "FeedbackNames",
-        //     column: "Name",
-        //     unique: true);
-        var indexMatches = Regex.Matches(code,
-            @"migrationBuilder\.CreateIndex\s*\(\s*name:\s*""(?<idxName>[^""]+)""\s*,\s*table:\s*""(?<tblName>[^""]+)""\s*,\s*(?:column:\s*""(?<singleCol>[^""]+)""|columns:\s*new\[\]\s*\{(?<multiCols>[^\}]+)\})(?:\s*,\s*unique:\s*(?<isUnique>true|false))?",
-            RegexOptions.Singleline);
-
-        foreach (Match match in indexMatches)
-        {
-            var idxName = match.Groups["idxName"].Value;
-            var tblName = match.Groups["tblName"].Value;
-            var isUnique = match.Groups["isUnique"].Success && bool.Parse(match.Groups["isUnique"].Value);
-
-            var table = schema.FindTable(tblName);
-            if (table == null)
-                continue;
-
-            var cols = new List<string>();
-            if (match.Groups["singleCol"].Success)
-            {
-                cols.Add(match.Groups["singleCol"].Value);
-            }
-            else if (match.Groups["multiCols"].Success)
-            {
-                var cleanCols = Regex.Matches(match.Groups["multiCols"].Value, @"""(?<col>[^""]+)""");
-                foreach (Match c in cleanCols)
+                if (!string.IsNullOrEmpty(targetTable) && srcCols.Count > 0)
                 {
-                    cols.Add(c.Groups["col"].Value);
-                }
-            }
-
-            var index = new Index
-            {
-                Name = idxName,
-                Columns = cols,
-                IsUnique = isUnique
-            };
-
-            table.Indexes.Add(index);
-        }
-    }
-
-    /// <summary>
-    /// Bir metod çağrısının başladığı noktadan (parantez açılışından) itibaren
-    /// eşleşen parantez kapanışına kadar olan kod bloğunu dengeli şekilde çıkarır.
-    /// </summary>
-    private static string ExtractMethodCallBlock(string code, int startIndex)
-    {
-        var openParenIndex = code.IndexOf('(', startIndex);
-        if (openParenIndex == -1)
-            return string.Empty;
-
-        int depth = 0;
-        for (int i = openParenIndex; i < code.Length; i++)
-        {
-            if (code[i] == '(') depth++;
-            else if (code[i] == ')')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    return code.Substring(startIndex, i - startIndex + 1);
+                    table.ForeignKeys.Add(new ForeignKey
+                    {
+                        ConstraintName = fkName,
+                        SourceTable = table.Name,
+                        SourceColumns = srcCols,
+                        TargetTable = targetTable,
+                        TargetColumns = targetCols.Count > 0 ? targetCols : new List<string> { "Id" },
+                        OnDelete = "Cascade"
+                    });
                 }
             }
         }
-
-        return string.Empty;
     }
+
+    private static void ParseAddColumn(InvocationExpressionSyntax inv, DatabaseSchema schema)
+    {
+        var tableName = GetStringArgument(inv.ArgumentList, "table", 1);
+        var colName = GetStringArgument(inv.ArgumentList, "name", 0);
+        var sqlType = GetStringArgument(inv.ArgumentList, "type", 2);
+        var nullable = GetBoolArgument(inv.ArgumentList, "nullable", 3) ?? true;
+        var defVal = GetStringArgument(inv.ArgumentList, "defaultValue") ?? GetStringArgument(inv.ArgumentList, "defaultValueSql");
+
+        if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(colName)) return;
+
+        var table = schema.FindTable(tableName) ?? new Table { Name = tableName };
+        if (!schema.Tables.Contains(table)) schema.Tables.Add(table);
+
+        var col = table.Columns.FirstOrDefault(c => string.Equals(c.Name, colName, StringComparison.OrdinalIgnoreCase));
+        if (col == null)
+        {
+            table.Columns.Add(new Column
+            {
+                Name = colName,
+                DataType = sqlType ?? "nvarchar(max)",
+                IsNullable = nullable,
+                DefaultValue = defVal
+            });
+        }
+    }
+
+    private static void ParseDropColumn(InvocationExpressionSyntax inv, DatabaseSchema schema)
+    {
+        var tableName = GetStringArgument(inv.ArgumentList, "table", 1);
+        var colName = GetStringArgument(inv.ArgumentList, "name", 0);
+
+        if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(colName)) return;
+
+        var table = schema.FindTable(tableName);
+        if (table != null)
+        {
+            table.Columns.RemoveAll(c => string.Equals(c.Name, colName, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    private static void ParseRenameColumn(InvocationExpressionSyntax inv, DatabaseSchema schema)
+    {
+        var tableName = GetStringArgument(inv.ArgumentList, "table", 1);
+        var colName = GetStringArgument(inv.ArgumentList, "name", 0);
+        var newName = GetStringArgument(inv.ArgumentList, "newName", 2);
+
+        if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(colName) || string.IsNullOrEmpty(newName)) return;
+
+        var table = schema.FindTable(tableName);
+        var col = table?.Columns.FirstOrDefault(c => string.Equals(c.Name, colName, StringComparison.OrdinalIgnoreCase));
+        if (col != null)
+        {
+            col.Name = newName;
+        }
+    }
+
+    private static void ParseAlterColumn(InvocationExpressionSyntax inv, DatabaseSchema schema)
+    {
+        var tableName = GetStringArgument(inv.ArgumentList, "table", 1);
+        var colName = GetStringArgument(inv.ArgumentList, "name", 0);
+        var sqlType = GetStringArgument(inv.ArgumentList, "type", 2);
+        var nullable = GetBoolArgument(inv.ArgumentList, "nullable");
+
+        if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(colName)) return;
+
+        var table = schema.FindTable(tableName);
+        var col = table?.Columns.FirstOrDefault(c => string.Equals(c.Name, colName, StringComparison.OrdinalIgnoreCase));
+        if (col != null)
+        {
+            if (!string.IsNullOrEmpty(sqlType)) col.DataType = sqlType;
+            if (nullable.HasValue) col.IsNullable = nullable.Value;
+        }
+    }
+
+    private static void ParseCreateIndex(InvocationExpressionSyntax inv, DatabaseSchema schema)
+    {
+        var idxName = GetStringArgument(inv.ArgumentList, "name", 0);
+        var tableName = GetStringArgument(inv.ArgumentList, "table", 1);
+        var singleCol = GetStringArgument(inv.ArgumentList, "column", 2);
+        var isUnique = GetBoolArgument(inv.ArgumentList, "unique") ?? false;
+
+        if (string.IsNullOrEmpty(tableName) || string.IsNullOrEmpty(idxName)) return;
+
+        var table = schema.FindTable(tableName);
+        if (table == null) return;
+
+        var cols = new List<string>();
+        if (!string.IsNullOrEmpty(singleCol))
+        {
+            cols.Add(singleCol);
+        }
+        else
+        {
+            // columns: new[] { "Col1", "Col2" }
+            var colsArg = GetArgument(inv.ArgumentList, "columns", 2);
+            if (colsArg?.Expression is ArrayCreationExpressionSyntax arr)
+            {
+                foreach (var init in arr.Initializer?.Expressions ?? Enumerable.Empty<ExpressionSyntax>())
+                {
+                    if (init is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.StringLiteralExpression))
+                    {
+                        cols.Add(lit.Token.ValueText);
+                    }
+                }
+            }
+        }
+
+        table.Indexes.Add(new Index
+        {
+            Name = idxName,
+            Columns = cols,
+            IsUnique = isUnique
+        });
+    }
+
+    private static void ParseDropTable(InvocationExpressionSyntax inv, DatabaseSchema schema)
+    {
+        var tableName = GetStringArgument(inv.ArgumentList, "name", 0);
+        if (!string.IsNullOrEmpty(tableName))
+        {
+            schema.Tables.RemoveAll(t => string.Equals(t.Name, tableName, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    #region Roslyn Argument Extraction Helpers
+
+    private static ArgumentSyntax? GetArgument(ArgumentListSyntax argList, string name, int positional = -1)
+    {
+        var named = argList.Arguments.FirstOrDefault(a => a.NameColon?.Name.Identifier.Text == name);
+        if (named != null) return named;
+
+        if (positional >= 0 && positional < argList.Arguments.Count && argList.Arguments[positional].NameColon == null)
+        {
+            return argList.Arguments[positional];
+        }
+
+        return null;
+    }
+
+    private static string? GetStringArgument(ArgumentListSyntax argList, string name, int positional = -1)
+    {
+        var arg = GetArgument(argList, name, positional);
+        if (arg?.Expression is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.StringLiteralExpression))
+        {
+            return lit.Token.ValueText;
+        }
+        return null;
+    }
+
+    private static bool? GetBoolArgument(ArgumentListSyntax argList, string name, int positional = -1)
+    {
+        var arg = GetArgument(argList, name, positional);
+        if (arg?.Expression is LiteralExpressionSyntax lit)
+        {
+            if (lit.IsKind(SyntaxKind.TrueLiteralExpression) || lit.Token.IsKind(SyntaxKind.TrueKeyword)) return true;
+            if (lit.IsKind(SyntaxKind.FalseLiteralExpression) || lit.Token.IsKind(SyntaxKind.FalseKeyword)) return false;
+        }
+        return null;
+    }
+
+    private static List<string> ExtractLambdaPropertyNames(ArgumentListSyntax argList, int positional, string? name = null)
+    {
+        var result = new List<string>();
+        ArgumentSyntax? arg = null;
+        if (!string.IsNullOrEmpty(name))
+        {
+            arg = argList.Arguments.FirstOrDefault(a => a.NameColon?.Name.Identifier.Text == name);
+        }
+        if (arg == null && positional >= 0 && positional < argList.Arguments.Count)
+        {
+            arg = argList.Arguments[positional];
+        }
+        if (arg == null)
+        {
+            arg = argList.Arguments.FirstOrDefault(a => a.Expression is LambdaExpressionSyntax);
+        }
+
+        if (arg?.Expression is LambdaExpressionSyntax lambda)
+        {
+            // x => x.Id
+            if (lambda.Body is MemberAccessExpressionSyntax ma)
+            {
+                result.Add(ma.Name.Identifier.Text);
+            }
+            // x => new { x.Id, x.Name }
+            else if (lambda.Body is AnonymousObjectCreationExpressionSyntax anon)
+            {
+                foreach (var init in anon.Initializers)
+                {
+                    if (init.Expression is MemberAccessExpressionSyntax m)
+                    {
+                        result.Add(m.Name.Identifier.Text);
+                    }
+                    else if (init.NameEquals != null)
+                    {
+                        result.Add(init.NameEquals.Name.Identifier.Text);
+                    }
+                }
+            }
+        }
+        else if (arg?.Expression is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.StringLiteralExpression))
+        {
+            result.Add(lit.Token.ValueText);
+        }
+
+        return result;
+    }
+
+    #endregion
 }

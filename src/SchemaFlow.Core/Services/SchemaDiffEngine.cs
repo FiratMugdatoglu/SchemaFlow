@@ -149,6 +149,43 @@ public class SchemaDiffEngine
                 });
             }
         }
+
+        // 3. Expand & Contract Tespiti (Aynı tabloda sütun silinmesi ve yeni sütun eklenmesi)
+        var droppedInTable = result.Changes
+            .Where(c => string.Equals(c.TableName, targetTable.Name, StringComparison.OrdinalIgnoreCase) && c.Type == ChangeType.ColumnDropped)
+            .ToList();
+
+        var addedInTable = result.Changes
+            .Where(c => string.Equals(c.TableName, targetTable.Name, StringComparison.OrdinalIgnoreCase) && c.Type == ChangeType.ColumnAdded)
+            .ToList();
+
+        if (droppedInTable.Count > 0 && addedInTable.Count > 0)
+        {
+            foreach (var drop in droppedInTable)
+            {
+                var add = addedInTable.First();
+                var plan = new ExpandContractPlan
+                {
+                    TableName = targetTable.Name,
+                    DroppedColumn = drop.ColumnName ?? "EskiSutun",
+                    AddedColumn = add.ColumnName ?? "YeniSutun",
+                    Reason = $"'{targetTable.Name}' tablosunda '{drop.ColumnName}' silinirken '{add.ColumnName}' eklenmiş. Bu bir kolon yeniden adlandırma veya refactoring ise, canlı sistemde veri kopyalanmadığı için '{drop.ColumnName}' içindeki TÜM VERİLER KALICI OLARAK SİLİNECEKTİR!",
+                    PhaseSteps = new List<string>
+                    {
+                        $"1. Aşama (Expand): '{add.ColumnName}' sütununu nullable veya varsayılan değerle sisteme ekleyin.",
+                        $"2. Aşama (Backfill): Mevcut verileri aktarın: UPDATE [{targetTable.Name}] SET [{add.ColumnName}] = [{drop.ColumnName}] WHERE [{add.ColumnName}] IS NULL;",
+                        $"3. Aşama (Migrate): Uygulamanızı yeni sütunu okuyup yazacak şekilde canlıya deploy edin.",
+                        $"4. Aşama (Contract): Sonraki sürümde '{drop.ColumnName}' sütununu güvenle Drop edin.",
+                        $"Hızlı Alternatif: Eğer kesintili bakım penceresi varsa 'migrationBuilder.RenameColumn(name: \"{drop.ColumnName}\", newName: \"{add.ColumnName}\", table: \"{targetTable.Name}\");' kullanabilirsiniz."
+                    },
+                    SuggestedSqlBackfill = $"UPDATE [{targetTable.Name}] SET [{add.ColumnName}] = [{drop.ColumnName}] WHERE [{add.ColumnName}] IS NULL;",
+                    SuggestedEfCoreCode = $"migrationBuilder.RenameColumn(name: \"{drop.ColumnName}\", newName: \"{add.ColumnName}\", table: \"{targetTable.Name}\");"
+                };
+
+                result.ExpandContractPlans.Add(plan);
+                drop.Recommendation = $"🔴 VERİ KAYBI RİSKİ: Expand & Contract planını inceleyin ('{drop.ColumnName}' ➡️ '{add.ColumnName}').";
+            }
+        }
     }
 
     private static void CompareForeignKeys(Table baseTable, Table targetTable, SchemaDiffResult result)

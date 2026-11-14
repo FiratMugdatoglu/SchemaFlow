@@ -12,6 +12,7 @@ public class SchemaChange
     public bool IsBreaking { get; set; }
     public string? OldValue { get; set; }
     public string? NewValue { get; set; }
+    public string? Recommendation { get; set; }
 }
 
 /// <summary>
@@ -36,6 +37,11 @@ public enum ChangeType
 public class SchemaDiffResult
 {
     public List<SchemaChange> Changes { get; set; } = new();
+
+    /// <summary>
+    /// Sıfır kesinti (Zero-Downtime) Expand & Contract geçiş stratejisi önerileri
+    /// </summary>
+    public List<ExpandContractPlan> ExpandContractPlans { get; set; } = new();
 
     public bool HasBreakingChanges => Changes.Any(c => c.IsBreaking);
 
