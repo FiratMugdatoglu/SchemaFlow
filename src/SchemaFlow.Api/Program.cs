@@ -143,33 +143,34 @@ app.MapGet("/api/v1/billing/plans", () => Results.Ok(new[]
     {
         Id = "pro",
         Name = "Pro (Solo Builder)",
-        PriceMonthly = 9,
-        PriceYearly = 79,
+        PriceMonthly = 12,
+        PriceYearly = 99,
         Interval = "month",
         Features = new[] 
         { 
             "Tüm Free özellikleri", 
-            "Sınırsız GitHub PR yorum botu", 
-            "Breaking Change & Schema Diff uyarısı", 
+            "GitHub Actions PR Botu (Kişisel repolar, 100 PR/ay)", 
+            "Breaking Change & Schema Diff risk uyarısı", 
             "Paylaşılabilir canlı şema web linki", 
             "PDF, SVG ve Yüksek Çözünürlüklü PNG çıktısı", 
-            "Sınırsız bulut proje kaydetme" 
+            "Tek tıkla hazır SQL düzeltme kodları (Quick-Fix)" 
         }
     },
     new
     {
         Id = "team",
-        Name = "Team (Ajanslar & Ekipler)",
-        PriceMonthly = 29,
-        PriceYearly = 249,
+        Name = "Team (Şirketler & CI/CD)",
+        PriceMonthly = 39,
+        PriceYearly = 349,
         Interval = "month",
         Features = new[] 
         { 
             "Tüm Pro özellikleri", 
-            "5 Takım arkadaşı lisansı", 
-            "White-Label (Özel şirket logosu & filigransız)", 
-            "Çoklu proje ve ekip paylaşımı", 
-            "Öncelikli e-posta desteği" 
+            "5 Geliştirici lisansı dahil", 
+            "GitHub Actions PR Safety Bot (Sınırsız PR analizi)", 
+            "Canlıyı bozan (Breaking) PR'ları merge engelleme", 
+            "Her PR'a otomatik görsel Before/After diff yorumu", 
+            "Paylaşımlı ekip linter kuralları & Öncelikli destek" 
         }
     }
 }))

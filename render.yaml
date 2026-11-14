@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: schemaflow-studio
+    env: docker
+    dockerfilePath: ./Dockerfile.api
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    autoDeploy: true
