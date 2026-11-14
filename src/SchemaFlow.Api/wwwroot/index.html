@@ -219,52 +219,68 @@ CREATE TABLE order_items (
       alert("Mermaid code copied to clipboard!");
     }
 
-    function getExportSvgData() {
-      const svg = document.querySelector('#diagram-container svg');
-      if (!svg) {
+    async function getPristineSvg() {
+      if (!currentMermaidCode) {
         alert("Please visualize a schema first!");
         return null;
       }
 
-      const viewport = svg.querySelector('.svg-pan-zoom_viewport') || svg;
-      const bbox = viewport.getBBox();
+      // Render fresh standalone SVG directly from Mermaid code (100% clean, immune to pan/zoom)
+      const uniqueId = 'export-render-' + Math.random().toString(36).substring(2, 9);
+      const { svg } = await mermaid.render(uniqueId, currentMermaidCode);
 
-      const clone = svg.cloneNode(true);
-      const cloneViewport = clone.querySelector('.svg-pan-zoom_viewport');
-      if (cloneViewport) {
-        cloneViewport.removeAttribute('transform');
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(svg, "image/svg+xml");
+      const svgEl = doc.documentElement;
+
+      let viewBox = svgEl.getAttribute("viewBox");
+      let width = 1200;
+      let height = 800;
+
+      if (viewBox) {
+        const parts = viewBox.trim().split(/[\s,]+/).map(Number);
+        if (parts.length === 4) {
+          width = parts[2];
+          height = parts[3];
+        }
+      } else {
+        width = parseFloat(svgEl.getAttribute("width")) || 1200;
+        height = parseFloat(svgEl.getAttribute("height")) || 800;
+        svgEl.setAttribute("viewBox", `0 0 ${width} ${height}`);
       }
 
-      const pad = 30;
-      const x = bbox.x - pad;
-      const y = bbox.y - pad;
-      const width = Math.max(Math.ceil(bbox.width + pad * 2), 200);
-      const height = Math.max(Math.ceil(bbox.height + pad * 2), 150);
+      const pad = 40;
+      const vbParts = svgEl.getAttribute("viewBox").trim().split(/[\s,]+/).map(Number);
+      const newX = vbParts[0] - pad;
+      const newY = vbParts[1] - pad;
+      const newW = vbParts[2] + pad * 2;
+      const newH = vbParts[3] + pad * 2;
 
-      clone.setAttribute('viewBox', `${x} ${y} ${width} ${height}`);
-      clone.setAttribute('width', width);
-      clone.setAttribute('height', height);
-      clone.style.width = width + 'px';
-      clone.style.height = height + 'px';
-      clone.style.backgroundColor = '#0b0f17';
+      svgEl.setAttribute("viewBox", `${newX} ${newY} ${newW} ${newH}`);
+      svgEl.setAttribute("width", newW);
+      svgEl.setAttribute("height", newH);
+      svgEl.style.width = newW + "px";
+      svgEl.style.height = newH + "px";
+      svgEl.style.backgroundColor = "#0b0f17";
 
-      const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      bgRect.setAttribute('x', x);
-      bgRect.setAttribute('y', y);
-      bgRect.setAttribute('width', width);
-      bgRect.setAttribute('height', height);
-      bgRect.setAttribute('fill', '#0b0f17');
-      clone.insertBefore(bgRect, clone.firstChild);
+      // Add solid dark background rect
+      const bgRect = doc.createElementNS("http://www.w3.org/2000/svg", "rect");
+      bgRect.setAttribute("x", newX);
+      bgRect.setAttribute("y", newY);
+      bgRect.setAttribute("width", newW);
+      bgRect.setAttribute("height", newH);
+      bgRect.setAttribute("fill", "#0b0f17");
+      svgEl.insertBefore(bgRect, svgEl.firstChild);
 
-      const svgData = new XMLSerializer().serializeToString(clone);
-      return { svgData, width, height };
+      const cleanSvgString = new XMLSerializer().serializeToString(svgEl);
+      return { svgString: cleanSvgString, width: newW, height: newH };
     }
 
-    function exportSvg() {
-      const data = getExportSvgData();
+    async function exportSvg() {
+      const data = await getPristineSvg();
       if (!data) return;
 
-      const blob = new Blob([data.svgData], { type: "image/svg+xml;charset=utf-8" });
+      const blob = new Blob([data.svgString], { type: "image/svg+xml;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -275,11 +291,11 @@ CREATE TABLE order_items (
       URL.revokeObjectURL(url);
     }
 
-    function exportPng() {
-      const data = getExportSvgData();
+    async function exportPng() {
+      const data = await getPristineSvg();
       if (!data) return;
 
-      const scale = 2; // High-resolution 2x scale
+      const scale = 2; // Crisp 2x high resolution
       const canvas = document.createElement("canvas");
       canvas.width = data.width * scale;
       canvas.height = data.height * scale;
@@ -289,7 +305,7 @@ CREATE TABLE order_items (
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       const img = new Image();
-      const blob = new Blob([data.svgData], { type: "image/svg+xml;charset=utf-8" });
+      const blob = new Blob([data.svgString], { type: "image/svg+xml;charset=utf-8" });
       const url = URL.createObjectURL(blob);
 
       img.onload = () => {
