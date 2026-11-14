@@ -1,29 +1,27 @@
 name: 'SchemaFlow Migration Safety CI'
 
-# Veritabanı ve migration dosyalarında değişiklik içeren Pull Request'lerde tetiklenir
+# .NET ve EF Core Migration dosyalarını içeren Pull Request'lerde otomatik tetiklenir
 on:
   pull_request:
     paths:
-      - '**/Migrations/**'
+      - '**/Migrations/**.cs'
       - '**/*.sql'
-      - '**/*.prisma'
-      - '**/*.py'
-      - '**/*.rb'
 
+# Minimum Permission Prensibi: Yalnızca kod okuma ve PR'a yorum yazma yetkisi
 permissions:
   contents: read
-  pull-requests: write # PR altına otomatik güvenlik ve risk yorumu atabilmek için
+  pull-requests: write
 
 jobs:
-  migration-safety:
-    name: '🛡️ Migration Risk & Breaking Change Dedektörü'
+  migration-safety-check:
+    name: '🛡️ Migration Risk & Safety Check'
     runs-on: ubuntu-latest
 
     steps:
       - name: 'Kodu Klonla'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Base branch (main) ile karşılaştırmak için tam geçmiş
+          fetch-depth: 0 # Base branch (target) ile PR branch'ini karşılaştırmak için
 
       - name: '.NET Ortamını Hazırla'
         uses: actions/setup-dotnet@v4
@@ -33,37 +31,104 @@ jobs:
       - name: 'SchemaFlow CLI Kurulumu'
         run: dotnet tool install -g SchemaFlow
 
-      - name: '1. Şema Sağlık & Anti-Pattern Denetimi (Lint)'
-        continue-on-error: true
+      - name: 'Değişen Migration Dosyalarını Tespit Et ve Güvenlik Analizi Yap'
+        id: analyze_migrations
+        shell: bash
         run: |
-          schemaflow lint -i faulty_schema.sql -o lint_report.md
+          echo "=== PR Kapsamında Eklenen/Değişen Migration Dosyaları Taranıyor ==="
+          
+          # Base branch ile HEAD arasındaki yeni/değişen migration dosyalarını listele
+          CHANGED_FILES=$(git diff --name-only --diff-filter=AM origin/${{ github.base_ref }} HEAD | grep -E "(Migrations/.*\.cs$|\.sql$)" || true)
 
-      - name: '2. Breaking Change & Risk Analizi (Diff)'
-        id: diff_check
-        continue-on-error: true
-        run: |
-          schemaflow diff -b v1_schema.sql -t v2_schema.sql -o diff_report.md --fail-on-breaking
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "İncelenecek migration dosyası bulunamadı."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-      - name: '3. PR Altına Otomatik Güvenlik Raporu Bırak'
-        if: always()
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          mkdir -p reports
+          REPORT_FILE="reports/schemaflow_pr_report.md"
+          
+          echo "# 🛡️ SchemaFlow Migration Güvenlik Denetimi" > $REPORT_FILE
+          echo "> **Base Branch:** \`${{ github.base_ref }}\` | **Hedef PR:** \`#${{ github.event.pull_request.number }}\`" >> $REPORT_FILE
+          echo "> **Tarih:** \`$(date -u '+%Y-%m-%d %H:%M:%S UTC')\`" >> $REPORT_FILE
+          echo "" >> $REPORT_FILE
+
+          ANY_BREAKING=0
+
+          for file in $CHANGED_FILES; do
+            echo "----------------------------------------------------"
+            echo "Analiz ediliyor: $file"
+            OUTPUT_MD="reports/$(basename "$file").md"
+            
+            # SchemaFlow offline statik analizi çalıştır
+            # Not: Exit code'u yakalamak için geçici değişkene alıyoruz
+            set +e
+            schemaflow lint -i "$file" -o "$OUTPUT_MD" --fail-on-errors
+            EXIT_CODE=$?
+            set -e
+
+            if [ $EXIT_CODE -ne 0 ]; then
+              ANY_BREAKING=1
+            fi
+
+            if [ -f "$OUTPUT_MD" ]; then
+              cat "$OUTPUT_MD" >> $REPORT_FILE
+              echo "" >> $REPORT_FILE
+              echo "---" >> $REPORT_FILE
+            fi
+          done
+
+          echo "any_breaking=$ANY_BREAKING" >> $GITHUB_OUTPUT
+
+      - name: 'PR Altına Güvenlik Raporunu Bırak / Güncelle'
+        if: steps.analyze_migrations.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            let comment = '## 🛡️ SchemaFlow.ai Migration Güvenlik Denetimi\n\n';
-            comment += '> Bu Pull Request veritabanı şemasını değiştiriyor. Canlı ortam riskleri otomatik analiz edildi:\n\n';
+            const path = 'reports/schemaflow_pr_report.md';
 
-            if (fs.existsSync('diff_report.md')) {
-              comment += fs.readFileSync('diff_report.md', 'utf8') + '\n\n';
+            if (!fs.existsSync(path)) {
+              console.log('Rapor dosyası bulunamadı.');
+              return;
             }
 
-            if (fs.existsSync('lint_report.md')) {
-              comment += '---\n\n' + fs.readFileSync('lint_report.md', 'utf8');
-            }
+            const body = fs.readFileSync(path, 'utf8');
+            const commentTag = '<!-- schemaflow-migration-safety-report -->';
+            const fullBody = `${commentTag}\n${body}\n\n---\n*Bu güvenlik raporu [SchemaFlow](https://github.com/FiratMugdatoglu/SchemaFlow) tarafından offline statik analiz ile üretilmiştir.*`;
 
-            await github.rest.issues.createComment({
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: comment
             });
+
+            const existingComment = comments.find(c => c.body.includes(commentTag));
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: fullBody
+              });
+              console.log('Mevcut SchemaFlow PR yorumu güncellendi.');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fullBody
+              });
+              console.log('Yeni SchemaFlow PR yorumu oluşturuldu.');
+            }
+
+      - name: 'Merge Koruması: Kritik Hatalarda CI İşlemini Başarısız Kıl'
+        if: steps.analyze_migrations.outputs.any_breaking == '1'
+        run: |
+          echo "::error::SchemaFlow: Migration dosyalarında canlı ortamda veri kaybına veya kesintiye yol açabilecek kritik riskler tespit edildi!"
+          echo "ÖNEMLİ: Bu kontrolün Pull Request merge işlemini engellemesi için GitHub Repository ayarlarından:"
+          echo "Settings -> Branches -> Branch protection rules -> 'Require status checks to pass before merging' seçeneğinde '🛡️ Migration Risk & Safety Check' kuralını zorunlu yapınız."
+          exit 1

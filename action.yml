@@ -1,43 +1,34 @@
-name: 'SchemaFlow.ai'
-description: 'PostgreSQL, MySQL ve MSSQL migration dosyalarından anında interaktif Mermaid ER diyagramı ve dokümantasyon üretir.'
-author: 'SchemaFlow.ai'
+name: 'SchemaFlow Migration Safety'
+description: 'Zero-Knowledge Database Migration Risk, Breaking Change, Linter & Expand-Contract Detector for .NET & EF Core Teams.'
+author: 'SchemaFlow Team'
 
 branding:
-  icon: 'database'
-  color: 'blue'
+  icon: 'shield'
+  color: 'orange'
 
 inputs:
   input:
-    description: 'Ayrıştırılacak SQL dosyası veya migration klasörünün yolu (örn: ./migrations).'
+    description: 'Ayrıştırılacak migration veya şema dosyasının yolu (.cs, .sql, .prisma).'
     required: true
-    default: './migrations'
+    default: './Migrations'
   
   output:
-    description: 'Dokümantasyonun kaydedileceği dosya (örn: ./docs/database.md).'
+    description: 'Güvenlik raporunun kaydedileceği dosya yolu (örn: ./reports/migration_safety.md).'
     required: false
-    default: './docs/database.md'
+    default: './reports/migration_safety.md'
 
-  dialect:
-    description: 'Hedef veritabanı motoru: postgres, mysql, efcore, prisma, liquibase, django, rails.'
+  fail-on-breaking:
+    description: 'Kritik canlı sistem riski veya veri kaybı tespit edildiğinde hata koduyla (exit code 1) sonlansın mı?'
     required: false
-    default: 'postgres'
-
-  format:
-    description: 'Çıktı biçimi: markdown (veri sözlüğü + diyagram) veya mermaid (sadece ER diyagramı).'
-    required: false
-    default: 'markdown'
+    default: 'true'
 
 runs:
   using: 'docker'
   image: 'Dockerfile'
   args:
-    - 'generate'
+    - 'lint'
     - '--input'
     - ${{ inputs.input }}
     - '--output'
     - ${{ inputs.output }}
-    - '--dialect'
-    - ${{ inputs.dialect }}
-    - '--format'
-    - ${{ inputs.format }}
-    - ${{ inputs.inject == 'true' && '--inject' || '' }}
+    - ${{ inputs['fail-on-breaking'] == 'true' && '--fail-on-errors' || '' }}

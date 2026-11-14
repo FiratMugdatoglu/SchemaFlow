@@ -1,4 +1,5 @@
 using SchemaFlow.Core.Models;
+using SchemaFlow.Core.Models.Operations;
 using SchemaFlow.Core.Services;
 using Xunit;
 
@@ -41,6 +42,10 @@ namespace DemoApp.Migrations
         Assert.Equal(2, result.Operations.Count);
         Assert.True(result.HasDestructiveChanges);
 
+        // Strongly-typed operation modelleri doğrulanmalı
+        Assert.Contains(result.Operations.OfType<DropColumnOperation>(), op => op.ColumnName == "Email");
+        Assert.Contains(result.Operations.OfType<AddColumnOperation>(), op => op.ColumnName == "EmailAddress");
+
         // Expand & Contract planı üretilmeli!
         Assert.Single(result.ExpandContractPlans);
         var plan = result.ExpandContractPlans.First();
@@ -48,8 +53,8 @@ namespace DemoApp.Migrations
         Assert.Equal("Email", plan.DroppedColumn);
         Assert.Equal("EmailAddress", plan.AddedColumn);
 
-        // İlgili EFM002 kural ihlali olmalı
-        var issue = result.Issues.FirstOrDefault(i => i.RuleId == "EFM002");
+        // İlgili MIG003 kural ihlali olmalı
+        var issue = result.Issues.FirstOrDefault(i => i.RuleId == "MIG003");
         Assert.NotNull(issue);
         Assert.Equal(LintSeverity.Error, issue.Severity);
         Assert.Contains("Expand & Contract", issue.Message);
@@ -79,7 +84,7 @@ namespace DemoApp.Migrations
 
         var result = _analyzer.AnalyzeMigrationCode(unsafeMigration);
 
-        var issue = result.Issues.FirstOrDefault(i => i.RuleId == "EFM003");
+        var issue = result.Issues.FirstOrDefault(i => i.RuleId == "MIG004");
         Assert.NotNull(issue);
         Assert.Equal(LintSeverity.Error, issue.Severity);
         Assert.Contains("NOT NULL", issue.Message);
@@ -105,12 +110,12 @@ namespace DemoApp.Migrations
 
         var result = _analyzer.AnalyzeMigrationCode(dropTableMigration);
 
-        var op = result.Operations.FirstOrDefault(o => o.Kind == MigrationOperationKind.DropTable);
+        var op = result.Operations.OfType<DropTableOperation>().FirstOrDefault();
         Assert.NotNull(op);
         Assert.Equal("OldLogs", op.TableName);
         Assert.True(op.IsDestructive);
 
-        var issue = result.Issues.FirstOrDefault(i => i.RuleId == "EFM004");
+        var issue = result.Issues.FirstOrDefault(i => i.RuleId == "MIG001");
         Assert.NotNull(issue);
         Assert.Equal(LintSeverity.Error, issue.Severity);
     }
@@ -138,13 +143,13 @@ namespace DemoApp.Migrations
 
         var result = _analyzer.AnalyzeMigrationCode(renameMigration);
 
-        var op = result.Operations.FirstOrDefault(o => o.Kind == MigrationOperationKind.RenameColumn);
+        var op = result.Operations.OfType<RenameColumnOperation>().FirstOrDefault();
         Assert.NotNull(op);
         Assert.Equal("Articles", op.TableName);
         Assert.Equal("OldTitle", op.ColumnName);
         Assert.Equal("Title", op.NewColumnName);
 
-        var issue = result.Issues.FirstOrDefault(i => i.RuleId == "EFM006");
+        var issue = result.Issues.FirstOrDefault(i => i.RuleId == "MIG006");
         Assert.NotNull(issue);
         Assert.Equal(LintSeverity.Warning, issue.Severity);
     }
