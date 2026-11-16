@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="banner.png" alt="SchemaFlow - Safe .NET Migration Analyzer" width="100%" style="border-radius: 12px; margin-bottom: 16px;" />
+<img src="schemaflow_logo.png" alt="SchemaFlow - Safe .NET Migration Analyzer" width="100%" style="border-radius: 12px; margin-bottom: 16px;" />
 
 [![.NET 9](https://img.shields.io/badge/.NET-9.0-purple.svg?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![NuGet](https://img.shields.io/nuget/v/SchemaFlow.svg?style=flat-square&logo=nuget)](https://www.nuget.org/packages/SchemaFlow)
