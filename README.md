@@ -1,9 +1,6 @@
 <div align="center">
 
-<img src="icon.png" width="128" height="128" alt="SchemaFlow Logo" />
-
-# 🌊 SchemaFlow
-### Database Migration Safety & Static Analysis Engine for .NET & Entity Framework Core
+<img src="banner.png" alt="SchemaFlow - Safe .NET Migration Analyzer" width="100%" style="border-radius: 12px; margin-bottom: 16px;" />
 
 [![.NET 9](https://img.shields.io/badge/.NET-9.0-purple.svg?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![NuGet](https://img.shields.io/nuget/v/SchemaFlow.svg?style=flat-square&logo=nuget)](https://www.nuget.org/packages/SchemaFlow)
