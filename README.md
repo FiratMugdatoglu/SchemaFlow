@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="icon.png" width="128" height="128" alt="SchemaFlow Logo" />
+
 # 🌊 SchemaFlow
 ### Database Migration Safety & Static Analysis Engine for .NET & Entity Framework Core
 
