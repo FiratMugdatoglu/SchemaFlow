@@ -21,8 +21,8 @@
     <PackageId>SchemaFlow</PackageId>
     <Version>1.0.6</Version>
     <Authors>SchemaFlow Team</Authors>
-    <Description>Developer-First Universal Database Schema Documentation, Mermaid ER Diagramming, Linter and Breaking Change Diff Engine.</Description>
-    <PackageTags>database;schema;mermaid;diff;migrations;documentation;linter;prisma;efcore;django;rails;sql</PackageTags>
+    <Description>Database Migration Safety &amp; Static Analysis Engine for .NET and Entity Framework Core. Powered by Microsoft Roslyn Compiler and Stateful SQL Lexer.</Description>
+    <PackageTags>efcore;migrations;database;safety;roslyn;linter;diff;breaking-changes;dotnet;sql</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>

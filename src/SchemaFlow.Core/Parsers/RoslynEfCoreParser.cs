@@ -35,6 +35,19 @@ public class RoslynEfCoreParser
         var classDeclaration = root.DescendantNodes().OfType<ClassDeclarationSyntax>().FirstOrDefault();
         result.MigrationClassName = classDeclaration?.Identifier.Text ?? Path.GetFileNameWithoutExtension(sourceFilePath) ?? "UnknownMigration";
 
+        // Roslyn CSharpCompilation ve SemanticModel oluştur (Sembol analizi ve tip doğrulaması için)
+        var compilation = CSharpCompilation.Create(
+            "SchemaFlow.SemanticAnalysis",
+            new[] { syntaxTree },
+            new[]
+            {
+                MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+                MetadataReference.CreateFromFile(typeof(Enumerable).Assembly.Location)
+            },
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var semanticModel = compilation.GetSemanticModel(syntaxTree);
+
         // 2. Up ve Down metotlarını ayrı ayrı analiz et
         var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>().ToList();
         var upMethod = methods.FirstOrDefault(m => m.Identifier.Text == "Up");
@@ -42,14 +55,14 @@ public class RoslynEfCoreParser
 
         if (upMethod != null)
         {
-            var upOps = ParseMethodOperations(upMethod, MigrationMethodScope.Up, sourceFilePath);
+            var upOps = ParseMethodOperations(upMethod, MigrationMethodScope.Up, sourceFilePath, classDeclaration, semanticModel);
             result.UpOperations.AddRange(upOps.Where(o => o is not UnknownOperation));
             result.UnresolvedOperations.AddRange(upOps.OfType<UnknownOperation>());
         }
 
         if (downMethod != null)
         {
-            var downOps = ParseMethodOperations(downMethod, MigrationMethodScope.Down, sourceFilePath);
+            var downOps = ParseMethodOperations(downMethod, MigrationMethodScope.Down, sourceFilePath, classDeclaration, semanticModel);
             result.DownOperations.AddRange(downOps.Where(o => o is not UnknownOperation));
             result.UnresolvedOperations.AddRange(downOps.OfType<UnknownOperation>());
         }
@@ -57,7 +70,7 @@ public class RoslynEfCoreParser
         // Eğer Up ve Down bulunamadıysa (örneğin sadece migration scripti veya gövdesiz kod)
         if (upMethod == null && downMethod == null)
         {
-            var genericOps = ParseMethodOperations(root, MigrationMethodScope.Up, sourceFilePath);
+            var genericOps = ParseMethodOperations(root, MigrationMethodScope.Up, sourceFilePath, classDeclaration, semanticModel);
             result.UpOperations.AddRange(genericOps.Where(o => o is not UnknownOperation));
             result.UnresolvedOperations.AddRange(genericOps.OfType<UnknownOperation>());
         }
@@ -65,15 +78,39 @@ public class RoslynEfCoreParser
         return result;
     }
 
-    private static List<MigrationOperation> ParseMethodOperations(SyntaxNode methodNode, MigrationMethodScope scope, string? sourceFilePath)
+    private static List<MigrationOperation> ParseMethodOperations(
+        SyntaxNode methodNode, 
+        MigrationMethodScope scope, 
+        string? sourceFilePath, 
+        ClassDeclarationSyntax? classDecl,
+        SemanticModel? semanticModel)
     {
         var operations = new List<MigrationOperation>();
         var invocations = methodNode.DescendantNodes().OfType<InvocationExpressionSyntax>();
 
+        // MigrationBuilder parametre isimlerini tespit et
+        var mbNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "migrationBuilder", "mb" };
+        if (methodNode is MethodDeclarationSyntax methodDecl)
+        {
+            foreach (var param in methodDecl.ParameterList.Parameters)
+            {
+                var typeStr = param.Type?.ToString();
+                if (typeStr != null && typeStr.Contains("MigrationBuilder", StringComparison.OrdinalIgnoreCase))
+                {
+                    mbNames.Add(param.Identifier.Text);
+                }
+                else if (methodDecl.ParameterList.Parameters.Count == 1 &&
+                         (methodDecl.Identifier.Text == "Up" || methodDecl.Identifier.Text == "Down"))
+                {
+                    mbNames.Add(param.Identifier.Text);
+                }
+            }
+        }
+
         foreach (var inv in invocations)
         {
-            // Yalnızca doğrudan migrationBuilder çağrılarını veya bilinen işlemleri ele al
-            if (!IsMigrationBuilderCall(inv, out var receiverName, out var methodName))
+            // Yalnızca doğrudan migrationBuilder çağrılarını ele al, alakasız metotları yoksay
+            if (!IsMigrationBuilderCall(inv, mbNames, semanticModel, methodNode, out var receiverName, out var methodName))
                 continue;
 
             var line = inv.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
@@ -81,7 +118,7 @@ public class RoslynEfCoreParser
 
             try
             {
-                var op = ParseSpecificOperation(methodName, inv, scope, line, sourceFilePath, rawText);
+                var op = ParseSpecificOperation(methodName, inv, scope, line, sourceFilePath, rawText, classDecl);
                 if (op != null)
                 {
                     operations.Add(op);
@@ -107,7 +144,13 @@ public class RoslynEfCoreParser
         return operations;
     }
 
-    private static bool IsMigrationBuilderCall(InvocationExpressionSyntax inv, out string receiverName, out string methodName)
+    private static bool IsMigrationBuilderCall(
+        InvocationExpressionSyntax inv, 
+        HashSet<string> mbNames, 
+        SemanticModel? semanticModel,
+        SyntaxNode methodScope,
+        out string receiverName, 
+        out string methodName)
     {
         receiverName = string.Empty;
         methodName = string.Empty;
@@ -115,29 +158,80 @@ public class RoslynEfCoreParser
         if (inv.Expression is MemberAccessExpressionSyntax ma)
         {
             methodName = ma.Name.Identifier.Text;
-            receiverName = ma.Expression.ToString();
+            var receiverExpr = ma.Expression;
 
-            // migrationBuilder, mb veya zincirleme çağrılar
-            if (receiverName.Contains("migrationBuilder", StringComparison.OrdinalIgnoreCase) ||
-                receiverName.Equals("mb", StringComparison.OrdinalIgnoreCase))
+            // Parantez ve cast ifadelerini aç
+            while (receiverExpr is ParenthesizedExpressionSyntax paren)
+                receiverExpr = paren.Expression;
+            while (receiverExpr is CastExpressionSyntax cast)
+                receiverExpr = cast.Expression;
+
+            receiverName = receiverExpr.ToString();
+
+            // 1. Semantic Model Denetimi (Sembol Çözümleme)
+            if (semanticModel != null)
             {
-                return true;
+                var typeInfo = semanticModel.GetTypeInfo(receiverExpr);
+                if (typeInfo.Type != null && typeInfo.Type.TypeKind != TypeKind.Error)
+                {
+                    var typeName = typeInfo.Type.Name;
+                    var fullType = typeInfo.Type.ToDisplayString();
+                    if (!typeName.Equals("MigrationBuilder", StringComparison.Ordinal) &&
+                        !fullType.Equals("Microsoft.EntityFrameworkCore.Migrations.MigrationBuilder", StringComparison.Ordinal))
+                    {
+                        // Sembol kesin olarak çözüldü ve gerçek MigrationBuilder değil (örn: CustomMigrationBuilder, Service)!
+                        return false;
+                    }
+                }
             }
 
-            // Standart EF Core metot isimleri
-            var efMethods = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            // 2. Sentaktik Yerel Değişken Tipi Denetimi (SemanticModel sembolü derleme referansı eksikliğinden IErrorTypeSymbol olsa bile)
+            if (receiverExpr is IdentifierNameSyntax id)
             {
-                "CreateTable", "DropTable", "RenameTable",
-                "AddColumn", "DropColumn", "RenameColumn", "AlterColumn",
-                "CreateIndex", "DropIndex",
-                "AddForeignKey", "DropForeignKey",
-                "AddPrimaryKey", "DropPrimaryKey",
-                "Sql"
-            };
+                var localDecl = methodScope.DescendantNodes()
+                    .OfType<VariableDeclaratorSyntax>()
+                    .FirstOrDefault(v => v.Identifier.Text == id.Identifier.Text);
 
-            if (efMethods.Contains(methodName))
+                if (localDecl != null)
+                {
+                    var varDeclParent = localDecl.Parent as VariableDeclarationSyntax;
+                    var explicitType = varDeclParent?.Type?.ToString();
+                    if (!string.IsNullOrEmpty(explicitType) &&
+                        !explicitType.Equals("var", StringComparison.OrdinalIgnoreCase) &&
+                        !explicitType.Equals("MigrationBuilder", StringComparison.Ordinal) &&
+                        !explicitType.EndsWith(".MigrationBuilder", StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    if (localDecl.Initializer?.Value is ObjectCreationExpressionSyntax objCreation)
+                    {
+                        var createdType = objCreation.Type.ToString();
+                        if (!createdType.Equals("MigrationBuilder", StringComparison.Ordinal) &&
+                            !createdType.EndsWith(".MigrationBuilder", StringComparison.Ordinal))
+                        {
+                            return false;
+                        }
+                    }
+                }
+
+                if (mbNames.Contains(id.Identifier.Text) ||
+                    id.Identifier.Text.Equals("migrationBuilder", StringComparison.OrdinalIgnoreCase) ||
+                    id.Identifier.Text.Equals("mb", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            // this.migrationBuilder erişimi
+            if (receiverExpr is MemberAccessExpressionSyntax thisMa && thisMa.Expression is ThisExpressionSyntax)
             {
-                return true;
+                if (mbNames.Contains(thisMa.Name.Identifier.Text) ||
+                    thisMa.Name.Identifier.Text.Contains("migrationBuilder", StringComparison.OrdinalIgnoreCase) ||
+                    thisMa.Name.Identifier.Text.Equals("mb", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
             }
         }
 
@@ -150,7 +244,8 @@ public class RoslynEfCoreParser
         MigrationMethodScope scope,
         int line,
         string? sourceFilePath,
-        string rawText)
+        string rawText,
+        ClassDeclarationSyntax? classDecl)
     {
         var args = inv.ArgumentList;
 
@@ -158,7 +253,10 @@ public class RoslynEfCoreParser
         {
             case "CreateTable":
             {
-                var tableName = GetStringConstant(args, "name", 0) ?? "UnknownTable";
+                var tableName = GetStringConstant(args, "name", 0, classDecl);
+                var isUnresolved = tableName == null;
+                var finalTableName = tableName ?? "UnknownTable";
+
                 var columns = new List<TableColumnDefinition>();
                 var pkCols = new List<string>();
 
@@ -172,7 +270,7 @@ public class RoslynEfCoreParser
                         var colName = declarator.NameEquals?.Name.Identifier.Text;
                         if (string.IsNullOrEmpty(colName)) continue;
 
-                        var colDef = ParseColumnDefinition(colName, declarator.Expression);
+                        var colDef = ParseColumnDefinition(colName, declarator.Expression, classDecl);
                         if (colDef != null) columns.Add(colDef);
                     }
                 }
@@ -186,7 +284,7 @@ public class RoslynEfCoreParser
                     {
                         if (cInv.Expression is MemberAccessExpressionSyntax cMa && cMa.Name.Identifier.Text == "PrimaryKey")
                         {
-                            var extractedPks = ExtractLambdaPropertyNames(cInv.ArgumentList, 1, "columns");
+                            var extractedPks = ExtractLambdaPropertyNames(cInv.ArgumentList, 1, "columns", classDecl);
                             pkCols.AddRange(extractedPks);
                         }
                     }
@@ -203,121 +301,162 @@ public class RoslynEfCoreParser
 
                 return new CreateTableOperation
                 {
-                    TableName = tableName,
+                    TableName = finalTableName,
                     Columns = columns,
                     PrimaryKeyColumns = pkCols,
                     Scope = scope,
                     LineNumber = line,
                     SourceFile = sourceFilePath,
-                    RawSyntax = rawText
+                    RawSyntax = rawText,
+                    Detection = isUnresolved ? DetectionType.Unknown : DetectionType.Confirmed,
+                    Confidence = isUnresolved ? AnalysisConfidence.Low : AnalysisConfidence.High
                 };
             }
 
             case "DropTable":
             {
-                var tableName = GetStringConstant(args, "name", 0) ?? "UnknownTable";
+                var tableName = GetStringConstant(args, "name", 0, classDecl);
+                var isUnresolved = tableName == null;
+
                 return new DropTableOperation
                 {
-                    TableName = tableName,
+                    TableName = tableName ?? "UnknownTable",
                     Scope = scope,
                     LineNumber = line,
                     SourceFile = sourceFilePath,
-                    RawSyntax = rawText
+                    RawSyntax = rawText,
+                    Detection = isUnresolved ? DetectionType.Unknown : DetectionType.Confirmed,
+                    Confidence = isUnresolved ? AnalysisConfidence.Low : AnalysisConfidence.High
                 };
             }
 
             case "RenameTable":
             {
-                var name = GetStringConstant(args, "name", 0) ?? "UnknownTable";
-                var newName = GetStringConstant(args, "newName", 1) ?? "UnknownNewName";
-                var schema = GetStringConstant(args, "schema");
-                var newSchema = GetStringConstant(args, "newSchema");
+                var name = GetStringConstant(args, "name", 0, classDecl);
+                var newName = GetStringConstant(args, "newName", 1, classDecl);
+                var schema = GetStringConstant(args, "schema", classDecl: classDecl);
+                var newSchema = GetStringConstant(args, "newSchema", classDecl: classDecl);
+                var isUnresolved = name == null || newName == null;
 
                 return new RenameTableOperation
                 {
-                    TableName = name,
-                    NewTableName = newName,
+                    TableName = name ?? "UnknownTable",
+                    NewTableName = newName ?? "UnknownNewName",
                     Schema = schema,
                     NewSchema = newSchema,
                     Scope = scope,
                     LineNumber = line,
                     SourceFile = sourceFilePath,
-                    RawSyntax = rawText
+                    RawSyntax = rawText,
+                    Detection = isUnresolved ? DetectionType.Unknown : DetectionType.Confirmed,
+                    Confidence = isUnresolved ? AnalysisConfidence.Low : AnalysisConfidence.High
                 };
             }
 
             case "AddColumn":
             {
-                var colName = GetStringConstant(args, "name", 0) ?? "UnknownColumn";
-                var tableName = GetStringConstant(args, "table", 1) ?? "UnknownTable";
-                var type = GetStringConstant(args, "type", 2) ?? ExtractGenericTypeName(inv) ?? "object";
-                var nullable = GetBoolConstant(args, "nullable", 3) ?? true;
-                var defVal = GetStringConstant(args, "defaultValue");
-                var defValSql = GetStringConstant(args, "defaultValueSql");
+                var colName = GetStringConstant(args, "name", 0, classDecl);
+                var tableName = GetStringConstant(args, "table", 1, classDecl);
+                var type = GetStringConstant(args, "type", 2, classDecl) ?? ExtractGenericTypeName(inv) ?? "object";
+
+                var nullableArg = GetArgument(args, "nullable", 3);
+                bool? nullable = null;
+                var isUnresolved = colName == null || tableName == null;
+
+                if (nullableArg != null)
+                {
+                    nullable = GetBoolConstant(args, "nullable", 3);
+                    if (nullable == null)
+                    {
+                        // Argüman verilmiş fakat değeri statik olarak çözümlenememiş (dinamik/değişken)
+                        isUnresolved = true;
+                    }
+                }
+                else
+                {
+                    // Belirtilmemişse EF Core varsayılanı nullable: false'tur (generic tip nullable değilse)
+                    if (type.EndsWith("?"))
+                        nullable = true;
+                    else
+                        nullable = false;
+                }
+
+                var defVal = GetStringConstant(args, "defaultValue", classDecl: classDecl);
+                var defValSql = GetStringConstant(args, "defaultValueSql", classDecl: classDecl);
 
                 return new AddColumnOperation
                 {
-                    TableName = tableName,
-                    ColumnName = colName,
+                    TableName = tableName ?? "UnknownTable",
+                    ColumnName = colName ?? "UnknownColumn",
                     DataType = type,
-                    IsNullable = nullable,
+                    IsNullable = nullable ?? true,
+                    IsNullableKnown = nullable != null,
                     DefaultValue = defVal,
                     DefaultValueSql = defValSql,
                     Scope = scope,
                     LineNumber = line,
                     SourceFile = sourceFilePath,
-                    RawSyntax = rawText
+                    RawSyntax = rawText,
+                    Detection = isUnresolved ? DetectionType.Unknown : DetectionType.Confirmed,
+                    Confidence = isUnresolved ? AnalysisConfidence.Low : AnalysisConfidence.High
                 };
             }
 
             case "DropColumn":
             {
-                var colName = GetStringConstant(args, "name", 0) ?? "UnknownColumn";
-                var tableName = GetStringConstant(args, "table", 1) ?? "UnknownTable";
+                var colName = GetStringConstant(args, "name", 0, classDecl);
+                var tableName = GetStringConstant(args, "table", 1, classDecl);
+                var isUnresolved = colName == null || tableName == null;
 
                 return new DropColumnOperation
                 {
-                    TableName = tableName,
-                    ColumnName = colName,
+                    TableName = tableName ?? "UnknownTable",
+                    ColumnName = colName ?? "UnknownColumn",
                     Scope = scope,
                     LineNumber = line,
                     SourceFile = sourceFilePath,
-                    RawSyntax = rawText
+                    RawSyntax = rawText,
+                    Detection = isUnresolved ? DetectionType.Unknown : DetectionType.Confirmed,
+                    Confidence = isUnresolved ? AnalysisConfidence.Low : AnalysisConfidence.High
                 };
             }
 
             case "RenameColumn":
             {
-                var colName = GetStringConstant(args, "name", 0) ?? "UnknownColumn";
-                var tableName = GetStringConstant(args, "table", 1) ?? "UnknownTable";
-                var newName = GetStringConstant(args, "newName", 2) ?? "UnknownNewName";
+                var colName = GetStringConstant(args, "name", 0, classDecl);
+                var tableName = GetStringConstant(args, "table", 1, classDecl);
+                var newName = GetStringConstant(args, "newName", 2, classDecl);
+                var isUnresolved = colName == null || tableName == null || newName == null;
 
                 return new RenameColumnOperation
                 {
-                    TableName = tableName,
-                    ColumnName = colName,
-                    NewColumnName = newName,
+                    TableName = tableName ?? "UnknownTable",
+                    ColumnName = colName ?? "UnknownColumn",
+                    NewColumnName = newName ?? "UnknownNewName",
                     Scope = scope,
                     LineNumber = line,
                     SourceFile = sourceFilePath,
-                    RawSyntax = rawText
+                    RawSyntax = rawText,
+                    Detection = isUnresolved ? DetectionType.Unknown : DetectionType.Confirmed,
+                    Confidence = isUnresolved ? AnalysisConfidence.Low : AnalysisConfidence.High
                 };
             }
 
             case "AlterColumn":
             {
-                var colName = GetStringConstant(args, "name", 0) ?? "UnknownColumn";
-                var tableName = GetStringConstant(args, "table", 1) ?? "UnknownTable";
-                var type = GetStringConstant(args, "type", 2) ?? ExtractGenericTypeName(inv);
+                var colName = GetStringConstant(args, "name", 0, classDecl);
+                var tableName = GetStringConstant(args, "table", 1, classDecl);
+                var type = GetStringConstant(args, "type", 2, classDecl) ?? ExtractGenericTypeName(inv);
                 var nullable = GetBoolConstant(args, "nullable");
-                var defVal = GetStringConstant(args, "defaultValue") ?? GetStringConstant(args, "defaultValueSql");
-                var oldType = GetStringConstant(args, "oldClrType") ?? GetStringConstant(args, "oldType");
+                var defVal = GetStringConstant(args, "defaultValue", classDecl: classDecl) ?? GetStringConstant(args, "defaultValueSql", classDecl: classDecl);
+                var oldType = GetStringConstant(args, "oldClrType", classDecl: classDecl) ?? GetStringConstant(args, "oldType", classDecl: classDecl);
                 var oldNullable = GetBoolConstant(args, "oldNullable");
+                var isUnresolved = colName == null || tableName == null;
 
                 return new AlterColumnOperation
                 {
-                    TableName = tableName,
-                    ColumnName = colName,
+                    TableName = tableName ?? "UnknownTable",
+                    ColumnName = colName ?? "UnknownColumn",
                     DataType = type,
                     IsNullable = nullable,
                     OldDataType = oldType,
@@ -326,15 +465,17 @@ public class RoslynEfCoreParser
                     Scope = scope,
                     LineNumber = line,
                     SourceFile = sourceFilePath,
-                    RawSyntax = rawText
+                    RawSyntax = rawText,
+                    Detection = isUnresolved ? DetectionType.Unknown : DetectionType.Confirmed,
+                    Confidence = isUnresolved ? AnalysisConfidence.Low : AnalysisConfidence.High
                 };
             }
 
             case "AddPrimaryKey":
             {
-                var name = GetStringConstant(args, "name", 0) ?? "PK_Unknown";
-                var table = GetStringConstant(args, "table", 1) ?? "UnknownTable";
-                var cols = ExtractLambdaPropertyNames(args, 2, "columns");
+                var name = GetStringConstant(args, "name", 0, classDecl) ?? "PK_Unknown";
+                var table = GetStringConstant(args, "table", 1, classDecl) ?? "UnknownTable";
+                var cols = ExtractLambdaPropertyNames(args, 2, "columns", classDecl);
 
                 return new AddPrimaryKeyOperation
                 {
@@ -350,8 +491,8 @@ public class RoslynEfCoreParser
 
             case "DropPrimaryKey":
             {
-                var name = GetStringConstant(args, "name", 0) ?? "PK_Unknown";
-                var table = GetStringConstant(args, "table", 1) ?? "UnknownTable";
+                var name = GetStringConstant(args, "name", 0, classDecl) ?? "PK_Unknown";
+                var table = GetStringConstant(args, "table", 1, classDecl) ?? "UnknownTable";
 
                 return new DropPrimaryKeyOperation
                 {
@@ -366,12 +507,12 @@ public class RoslynEfCoreParser
 
             case "AddForeignKey":
             {
-                var name = GetStringConstant(args, "name", 0) ?? "FK_Unknown";
-                var table = GetStringConstant(args, "table", 1) ?? "UnknownTable";
-                var srcCols = ExtractLambdaPropertyNames(args, 2, "columns");
-                var targetTable = GetStringConstant(args, "principalTable", 3) ?? "UnknownTarget";
-                var targetCols = ExtractLambdaPropertyNames(args, 4, "principalColumns");
-                var onDelete = GetStringConstant(args, "onDelete");
+                var name = GetStringConstant(args, "name", 0, classDecl) ?? "FK_Unknown";
+                var table = GetStringConstant(args, "table", 1, classDecl) ?? "UnknownTable";
+                var srcCols = ExtractLambdaPropertyNames(args, 2, "columns", classDecl);
+                var targetTable = GetStringConstant(args, "principalTable", 3, classDecl) ?? "UnknownTarget";
+                var targetCols = ExtractLambdaPropertyNames(args, 4, "principalColumns", classDecl);
+                var onDelete = GetStringConstant(args, "onDelete", classDecl: classDecl);
 
                 return new AddForeignKeyOperation
                 {
@@ -390,8 +531,8 @@ public class RoslynEfCoreParser
 
             case "DropForeignKey":
             {
-                var name = GetStringConstant(args, "name", 0) ?? "FK_Unknown";
-                var table = GetStringConstant(args, "table", 1) ?? "UnknownTable";
+                var name = GetStringConstant(args, "name", 0, classDecl) ?? "FK_Unknown";
+                var table = GetStringConstant(args, "table", 1, classDecl) ?? "UnknownTable";
 
                 return new DropForeignKeyOperation
                 {
@@ -406,11 +547,11 @@ public class RoslynEfCoreParser
 
             case "CreateIndex":
             {
-                var name = GetStringConstant(args, "name", 0) ?? "IX_Unknown";
-                var table = GetStringConstant(args, "table", 1) ?? "UnknownTable";
-                var cols = ExtractLambdaPropertyNames(args, 2, "columns");
+                var name = GetStringConstant(args, "name", 0, classDecl) ?? "IX_Unknown";
+                var table = GetStringConstant(args, "table", 1, classDecl) ?? "UnknownTable";
+                var cols = ExtractLambdaPropertyNames(args, 2, "columns", classDecl);
                 var unique = GetBoolConstant(args, "unique") ?? false;
-                var filter = GetStringConstant(args, "filter");
+                var filter = GetStringConstant(args, "filter", classDecl: classDecl);
 
                 return new CreateIndexOperation
                 {
@@ -428,8 +569,8 @@ public class RoslynEfCoreParser
 
             case "DropIndex":
             {
-                var name = GetStringConstant(args, "name", 0) ?? "IX_Unknown";
-                var table = GetStringConstant(args, "table", 1) ?? "UnknownTable";
+                var name = GetStringConstant(args, "name", 0, classDecl) ?? "IX_Unknown";
+                var table = GetStringConstant(args, "table", 1, classDecl) ?? "UnknownTable";
 
                 return new DropIndexOperation
                 {
@@ -444,7 +585,7 @@ public class RoslynEfCoreParser
 
             case "Sql":
             {
-                var sql = GetStringConstant(args, "sql", 0) ?? rawText;
+                var sql = GetStringConstant(args, "sql", 0, classDecl) ?? rawText;
                 var suppress = GetBoolConstant(args, "suppressTransaction") ?? false;
 
                 return new RawSqlOperation
@@ -463,7 +604,7 @@ public class RoslynEfCoreParser
                 return new UnknownOperation
                 {
                     MethodName = methodName,
-                    TableName = GetStringConstant(args, "table", 1) ?? string.Empty,
+                    TableName = GetStringConstant(args, "table", 1, classDecl) ?? string.Empty,
                     Reason = $"Desteklenmeyen veya özel migration çağrısı: '{methodName}'",
                     Scope = scope,
                     LineNumber = line,
@@ -476,7 +617,7 @@ public class RoslynEfCoreParser
         }
     }
 
-    private static TableColumnDefinition? ParseColumnDefinition(string colName, ExpressionSyntax expr)
+    private static TableColumnDefinition? ParseColumnDefinition(string colName, ExpressionSyntax expr, ClassDeclarationSyntax? classDecl)
     {
         InvocationExpressionSyntax? colInv = null;
         var curr = expr;
@@ -501,10 +642,10 @@ public class RoslynEfCoreParser
         if (colInv == null) return null;
 
         var clrType = ExtractGenericTypeName(colInv) ?? "string";
-        var sqlType = GetStringConstant(colInv.ArgumentList, "type");
+        var sqlType = GetStringConstant(colInv.ArgumentList, "type", classDecl: classDecl);
         var isNullable = GetBoolConstant(colInv.ArgumentList, "nullable") ?? false;
-        var defValSql = GetStringConstant(colInv.ArgumentList, "defaultValueSql");
-        var defVal = defValSql ?? GetStringConstant(colInv.ArgumentList, "defaultValue");
+        var defValSql = GetStringConstant(colInv.ArgumentList, "defaultValueSql", classDecl: classDecl);
+        var defVal = defValSql ?? GetStringConstant(colInv.ArgumentList, "defaultValue", classDecl: classDecl);
 
         return new TableColumnDefinition(
             Name: colName,
@@ -530,28 +671,154 @@ public class RoslynEfCoreParser
         return null;
     }
 
-    private static string? GetStringConstant(ArgumentListSyntax argList, string name, int positional = -1)
+    private static string? GetStringConstant(
+        ArgumentListSyntax argList, 
+        string name, 
+        int positional = -1, 
+        ClassDeclarationSyntax? classDecl = null)
     {
         var arg = GetArgument(argList, name, positional);
-        if (arg?.Expression is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.StringLiteralExpression))
+        if (arg == null) return null;
+
+        return ResolveStringExpression(arg.Expression, classDecl);
+    }
+
+    private static string? ResolveStringExpression(ExpressionSyntax? expr, ClassDeclarationSyntax? enclosingClass)
+    {
+        if (expr == null) return null;
+
+        while (expr is ParenthesizedExpressionSyntax paren)
+            expr = paren.Expression;
+
+        // 1. Literal string
+        if (expr is LiteralExpressionSyntax lit)
         {
-            return lit.Token.ValueText;
+            if (lit.IsKind(SyntaxKind.StringLiteralExpression))
+                return lit.Token.ValueText;
+            if (lit.IsKind(SyntaxKind.NullLiteralExpression))
+                return null;
         }
 
-        // Sabit ifade veya nameof(x)
-        if (arg?.Expression is InvocationExpressionSyntax nameofInv &&
-            nameofInv.Expression is IdentifierNameSyntax id && id.Identifier.Text == "nameof")
+        // 2. nameof(...)
+        if (expr is InvocationExpressionSyntax nameofInv &&
+            nameofInv.Expression is IdentifierNameSyntax id && 
+            id.Identifier.Text == "nameof")
         {
-            return nameofInv.ArgumentList.Arguments.FirstOrDefault()?.Expression.ToString();
+            var targetExpr = nameofInv.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+            return ResolveNameOf(targetExpr);
+        }
+
+        // 3. String concatenation (+)
+        if (expr is BinaryExpressionSyntax bin && bin.IsKind(SyntaxKind.AddExpression))
+        {
+            var left = ResolveStringExpression(bin.Left, enclosingClass);
+            var right = ResolveStringExpression(bin.Right, enclosingClass);
+            if (left != null && right != null)
+            {
+                return left + right;
+            }
+            return null;
+        }
+
+        // 4. Interpolated string ($"...")
+        if (expr is InterpolatedStringExpressionSyntax interpolated)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var content in interpolated.Contents)
+            {
+                if (content is InterpolatedStringTextSyntax text)
+                {
+                    sb.Append(text.TextToken.ValueText);
+                }
+                else if (content is InterpolationSyntax interp)
+                {
+                    var val = ResolveStringExpression(interp.Expression, enclosingClass);
+                    if (val == null) return null;
+                    sb.Append(val);
+                }
+            }
+            return sb.ToString();
+        }
+
+        // 5. IdentifierName (const alan veya yerel const)
+        if (expr is IdentifierNameSyntax ident)
+        {
+            var constName = ident.Identifier.Text;
+
+            // Enclosing class const fields
+            var classDecl = enclosingClass ?? expr.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+            if (classDecl != null)
+            {
+                var field = classDecl.DescendantNodes()
+                    .OfType<FieldDeclarationSyntax>()
+                    .Where(f => f.Modifiers.Any(m => m.IsKind(SyntaxKind.ConstKeyword)))
+                    .SelectMany(f => f.Declaration.Variables)
+                    .FirstOrDefault(v => v.Identifier.Text == constName);
+
+                if (field?.Initializer != null)
+                {
+                    return ResolveStringExpression(field.Initializer.Value, classDecl);
+                }
+            }
+
+            // Enclosing method local consts
+            var methodDecl = expr.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+            if (methodDecl != null)
+            {
+                var localConst = methodDecl.DescendantNodes()
+                    .OfType<LocalDeclarationStatementSyntax>()
+                    .Where(l => l.Modifiers.Any(m => m.IsKind(SyntaxKind.ConstKeyword)))
+                    .SelectMany(l => l.Declaration.Variables)
+                    .FirstOrDefault(v => v.Identifier.Text == constName);
+
+                if (localConst?.Initializer != null)
+                {
+                    return ResolveStringExpression(localConst.Initializer.Value, classDecl);
+                }
+            }
         }
 
         return null;
     }
 
+    private static string? ResolveNameOf(ExpressionSyntax? expr)
+    {
+        if (expr == null) return null;
+        while (expr is ParenthesizedExpressionSyntax paren) expr = paren.Expression;
+
+        if (expr is MemberAccessExpressionSyntax ma)
+        {
+            return ma.Name.Identifier.Text;
+        }
+        if (expr is IdentifierNameSyntax id)
+        {
+            return id.Identifier.Text;
+        }
+        if (expr is GenericNameSyntax gn)
+        {
+            return gn.Identifier.Text;
+        }
+        if (expr is QualifiedNameSyntax qn)
+        {
+            return qn.Right.Identifier.Text;
+        }
+        if (expr is MemberBindingExpressionSyntax mb)
+        {
+            return mb.Name.Identifier.Text;
+        }
+
+        return expr.ToString();
+    }
+
     private static bool? GetBoolConstant(ArgumentListSyntax argList, string name, int positional = -1)
     {
         var arg = GetArgument(argList, name, positional);
-        if (arg?.Expression is LiteralExpressionSyntax lit)
+        if (arg == null) return null;
+
+        var expr = arg.Expression;
+        while (expr is ParenthesizedExpressionSyntax paren) expr = paren.Expression;
+
+        if (expr is LiteralExpressionSyntax lit)
         {
             if (lit.IsKind(SyntaxKind.TrueLiteralExpression) || lit.Token.IsKind(SyntaxKind.TrueKeyword)) return true;
             if (lit.IsKind(SyntaxKind.FalseLiteralExpression) || lit.Token.IsKind(SyntaxKind.FalseKeyword)) return false;
@@ -570,7 +837,11 @@ public class RoslynEfCoreParser
         return null;
     }
 
-    private static List<string> ExtractLambdaPropertyNames(ArgumentListSyntax argList, int positional, string? name = null)
+    private static List<string> ExtractLambdaPropertyNames(
+        ArgumentListSyntax argList, 
+        int positional, 
+        string? name = null,
+        ClassDeclarationSyntax? classDecl = null)
     {
         var result = new List<string>();
         ArgumentSyntax? arg = null;
@@ -611,6 +882,22 @@ public class RoslynEfCoreParser
         else if (arg?.Expression is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.StringLiteralExpression))
         {
             result.Add(lit.Token.ValueText);
+        }
+        else if (arg?.Expression is ArrayCreationExpressionSyntax arrayCreation && arrayCreation.Initializer != null)
+        {
+            foreach (var expr in arrayCreation.Initializer.Expressions)
+            {
+                var s = ResolveStringExpression(expr, classDecl);
+                if (!string.IsNullOrEmpty(s)) result.Add(s);
+            }
+        }
+        else if (arg?.Expression is ImplicitArrayCreationExpressionSyntax implicitArray && implicitArray.Initializer != null)
+        {
+            foreach (var expr in implicitArray.Initializer.Expressions)
+            {
+                var s = ResolveStringExpression(expr, classDecl);
+                if (!string.IsNullOrEmpty(s)) result.Add(s);
+            }
         }
 
         return result;

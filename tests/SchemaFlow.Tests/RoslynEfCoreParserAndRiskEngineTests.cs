@@ -185,11 +185,12 @@ namespace TestMigrations
         var parseResult = _parser.ParseMigration(codeWithSafeBackfill);
         var safetyReport = _riskEngine.Analyze(parseResult.AllOperations);
 
-        // Arada SQL olduğu için MIG003 Critical (Kayıp) değil, Medium (Doğrulama Bilgisi) olmalıdır!
+        // Statik analizde UPDATE adayının sırası doğrulansa dahi veri kaybı riski tamamen sıfırlanamaz (High severity + runtime verification)
         var mig003 = safetyReport.Issues.FirstOrDefault(i => i.RuleId == "MIG003");
         Assert.NotNull(mig003);
-        Assert.Equal(RiskSeverity.Medium, mig003.Severity);
+        Assert.Equal(RiskSeverity.High, mig003.Severity);
         Assert.Contains("Veri Taşımalı Sütun Değişimi", mig003.Title);
+        Assert.Contains("Doğrulama Gerekli", mig003.Title);
     }
 
     [Fact]

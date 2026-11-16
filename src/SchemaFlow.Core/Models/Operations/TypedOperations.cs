@@ -38,15 +38,18 @@ public record AddColumnOperation : MigrationOperation
     public string ColumnName { get; init; } = string.Empty;
     public string DataType { get; init; } = string.Empty;
     public bool IsNullable { get; init; } = true;
+    public bool IsNullableKnown { get; init; } = true;
+    public bool? NullableState => IsNullableKnown ? IsNullable : null;
     public string? DefaultValue { get; init; }
     public string? DefaultValueSql { get; init; }
-    public override string ToDisplaySummary() => $"AddColumn '{TableName}.{ColumnName}' ({DataType}, Nullable: {IsNullable})";
+    public override string ToDisplaySummary() => $"AddColumn '{TableName}.{ColumnName}' ({DataType}, Nullable: {(IsNullableKnown ? IsNullable.ToString() : "Unknown")})";
 }
 
 public record DropColumnOperation : MigrationOperation
 {
     public override string OperationName => "DropColumn";
     public string ColumnName { get; init; } = string.Empty;
+    public string? DataType { get; init; }
     public override string ToDisplaySummary() => $"DropColumn '{TableName}.{ColumnName}' (Kalıcı sütun silinmesi)";
 }
 
